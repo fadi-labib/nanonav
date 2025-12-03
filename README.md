@@ -51,7 +51,7 @@ Navigation is an interesting testbed for recursive reasoning because:
 
 3. **Efficiency vs. Capability Trade-off**: Traditional pathfinding (A*) is optimal but requires explicit graph search. Can a tiny learned model with recursive refinement achieve comparable results? This is the core research question.
 
-4. **Resource-Constrained Deployment**: For embedded robotics (the "nano" in nanopilot), having a small model that can "think longer" on hard problems is more practical than a large model that's fast but memory-hungry.
+4. **Resource-Constrained Deployment**: For embedded robotics (the "nano" in nanonav), having a small model that can "think longer" on hard problems is more practical than a large model that's fast but memory-hungry.
 
 ### Research Questions
 
