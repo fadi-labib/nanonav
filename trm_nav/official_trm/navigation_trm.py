@@ -121,7 +121,7 @@ class NavigationTRM(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 5)  # UP, DOWN, LEFT, RIGHT, STAY
+            nn.Linear(hidden_size, 4)  # UP, DOWN, LEFT, RIGHT
         )
         
         # Initialize weights

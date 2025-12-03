@@ -157,7 +157,6 @@ def plot_action_sequence(
         1: '#FFF3E0',  # DOWN - light orange
         2: '#F3E5F5',  # LEFT - light purple
         3: '#E8F5E9',  # RIGHT - light green
-        4: '#ECEFF1',  # STAY - gray
     }
 
     for i, action in enumerate(actions):

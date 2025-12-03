@@ -113,11 +113,11 @@ def test_get_next_action():
     action = get_next_action(grid, (0, 0), (0, 3))
     assert action == 3, f"Should go RIGHT, got {ACTION_NAMES[action]}"
 
-    # At goal
+    # At goal - should return -1 (no action needed)
     action = get_next_action(grid, (2, 2), (2, 2))
-    assert action == 4, f"Should STAY at goal, got {ACTION_NAMES[action]}"
+    assert action == -1, f"Should return -1 at goal, got {action}"
 
-    print("✓ Next action: RIGHT toward goal, STAY at goal")
+    print("✓ Next action: RIGHT toward goal, -1 at goal")
 
 
 def run_all():

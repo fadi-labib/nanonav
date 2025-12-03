@@ -27,7 +27,7 @@ class TRMNavigator(nn.Module):
         num_tokens: int = 256,
         seq_len: int = 68,  # 8*8 + 4 for 8x8 grid
         depth: int = 2,
-        num_actions: int = 5,
+        num_actions: int = 4,
         max_recursion_steps: int = 30,
         halt_prob_thres: float = 0.5,
         dropout: float = 0.1,

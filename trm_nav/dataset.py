@@ -15,41 +15,41 @@ from .a_star import astar_path, path_to_actions
 from .map_generator import generate_solvable_map
 
 
-# Action mapping: 0=UP, 1=DOWN, 2=LEFT, 3=RIGHT, 4=STAY
+# Action mapping: 0=UP, 1=DOWN, 2=LEFT, 3=RIGHT
 # When we rotate/flip the grid, actions must be transformed accordingly
 
 def rotate_action_90(action: int) -> int:
     """Rotate action 90° clockwise."""
-    # UP→RIGHT, RIGHT→DOWN, DOWN→LEFT, LEFT→UP, STAY→STAY
-    mapping = {0: 3, 1: 2, 2: 0, 3: 1, 4: 4}
+    # UP→RIGHT, RIGHT→DOWN, DOWN→LEFT, LEFT→UP
+    mapping = {0: 3, 1: 2, 2: 0, 3: 1}
     return mapping[action]
 
 
 def rotate_action_180(action: int) -> int:
     """Rotate action 180°."""
-    # UP→DOWN, DOWN→UP, LEFT→RIGHT, RIGHT→LEFT, STAY→STAY
-    mapping = {0: 1, 1: 0, 2: 3, 3: 2, 4: 4}
+    # UP→DOWN, DOWN→UP, LEFT→RIGHT, RIGHT→LEFT
+    mapping = {0: 1, 1: 0, 2: 3, 3: 2}
     return mapping[action]
 
 
 def rotate_action_270(action: int) -> int:
     """Rotate action 270° clockwise (= 90° counter-clockwise)."""
-    # UP→LEFT, LEFT→DOWN, DOWN→RIGHT, RIGHT→UP, STAY→STAY
-    mapping = {0: 2, 1: 3, 2: 1, 3: 0, 4: 4}
+    # UP→LEFT, LEFT→DOWN, DOWN→RIGHT, RIGHT→UP
+    mapping = {0: 2, 1: 3, 2: 1, 3: 0}
     return mapping[action]
 
 
 def flip_action_horizontal(action: int) -> int:
     """Flip action horizontally (mirror left-right)."""
-    # LEFT↔RIGHT, UP/DOWN/STAY unchanged
-    mapping = {0: 0, 1: 1, 2: 3, 3: 2, 4: 4}
+    # LEFT↔RIGHT, UP/DOWN unchanged
+    mapping = {0: 0, 1: 1, 2: 3, 3: 2}
     return mapping[action]
 
 
 def flip_action_vertical(action: int) -> int:
     """Flip action vertically (mirror up-down)."""
-    # UP↔DOWN, LEFT/RIGHT/STAY unchanged
-    mapping = {0: 1, 1: 0, 2: 2, 3: 3, 4: 4}
+    # UP↔DOWN, LEFT/RIGHT unchanged
+    mapping = {0: 1, 1: 0, 2: 2, 3: 3}
     return mapping[action]
 
 
@@ -171,7 +171,7 @@ class NavigationDataset(Dataset):
 
     Each sample contains:
         - tokens: Encoded state (flattened grid + start/goal coords)
-        - action: Target action ID (0-4)
+        - action: Target action ID (0-3)
     """
 
     def __init__(self, data_path: Optional[str] = None, data: Optional[dict] = None):

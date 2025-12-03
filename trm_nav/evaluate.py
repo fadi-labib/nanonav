@@ -73,7 +73,7 @@ def rollout_episode(
             path.append(current)
 
             # Check for stuck (same position twice in a row)
-            if len(path) >= 2 and path[-1] == path[-2] and action != 4:
+            if len(path) >= 2 and path[-1] == path[-2]:
                 # Tried to move but couldn't - might be stuck
                 pass
 

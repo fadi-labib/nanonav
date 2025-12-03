@@ -102,7 +102,10 @@ def test_inference_loop():
             logits = model(tokens)
             pred_action = logits.argmax(dim=-1).item()
 
-            optimal_action = path_to_actions(optimal_path)[0] if len(optimal_path) > 1 else 4
+            # Skip if path is too short (at goal already)
+            if len(optimal_path) <= 1:
+                continue
+            optimal_action = path_to_actions(optimal_path)[0]
 
             results.append({
                 'predicted': ACTION_NAMES[pred_action],

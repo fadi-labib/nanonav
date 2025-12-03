@@ -29,7 +29,7 @@ except ImportError as e:
 
 class NavigationTRM(nn.Module):
     """Navigation wrapper for the official TRM implementation."""
-    
+
     def __init__(
         self,
         seq_len: int = 68,
@@ -38,26 +38,28 @@ class NavigationTRM(nn.Module):
         num_heads: int = 4,
         max_recursion_steps: int = 8,
         dropout: float = 0.1,
+        num_actions: int = 4,
         **kwargs
     ):
         super().__init__()
-        
+        self.num_actions = num_actions
+
         if not _TRM_AVAILABLE:
             raise ImportError(f"Official TRM not available: {_IMPORT_ERROR}. Please ensure the submodule is properly initialized.")
         else:
-            self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout)
+            self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions)
     
-    def _init_fallback(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout):
+    def _init_fallback(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions):
         """Fallback implementation using simple transformer."""
         self.use_official = False
         self.seq_len = seq_len
         self.hidden_size = hidden_size
         self.max_recursion_steps = max_recursion_steps
-        
+
         # Simple transformer-based implementation
         self.token_embed = nn.Embedding(vocab_size, hidden_size)
         self.pos_embed = nn.Embedding(seq_len, hidden_size)
-        
+
         # Multi-head attention layers
         self.attention_layers = nn.ModuleList([
             nn.MultiheadAttention(
@@ -67,11 +69,11 @@ class NavigationTRM(nn.Module):
                 batch_first=True
             ) for _ in range(2)
         ])
-        
+
         self.layer_norms = nn.ModuleList([
             nn.LayerNorm(hidden_size) for _ in range(2)
         ])
-        
+
         self.ffns = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_size, int(hidden_size * 2.0)),
@@ -80,25 +82,25 @@ class NavigationTRM(nn.Module):
                 nn.Linear(int(hidden_size * 2.0), hidden_size)
             ) for _ in range(2)
         ])
-        
+
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_size),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 5)
+            nn.Linear(hidden_size, num_actions)
         )
-        
+
         self._init_weights()
     
-    def _init_official(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout):
+    def _init_official(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions):
         """Initialize with official TRM implementation."""
         self.use_official = True
         self.seq_len = seq_len
         self.hidden_size = hidden_size
         self.max_recursion_steps = max_recursion_steps
-        
+
         # Create config dict for the official TRM
         config_dict = {
             "batch_size": 1,  # Will be overridden at runtime
@@ -119,7 +121,7 @@ class NavigationTRM(nn.Module):
             "halt_exploration_prob": 0.0,
             "puzzle_emb_len": 0  # Explicitly set to 0 since we don't use puzzle embeddings
         }
-        
+
         # Initialize the official TRM
         self.trm = TinyRecursiveReasoningModel_ACTV1(config_dict)
         self.config = self.trm.config
@@ -135,7 +137,7 @@ class NavigationTRM(nn.Module):
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 5)
+            nn.Linear(hidden_size, num_actions)
         )
     
     def _init_weights(self):

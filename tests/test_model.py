@@ -30,7 +30,7 @@ def test_model_creation():
     assert isinstance(model, TRMNavigator)
     assert model.dim == 64
     assert model.seq_len == 68  # 8*8 + 4
-    assert model.num_actions == 5
+    assert model.num_actions == 4
 
     num_params = sum(p.numel() for p in model.parameters())
     print(f"✓ Model created: {num_params:,} parameters")
@@ -46,7 +46,7 @@ def test_forward_pass_shape():
 
     output = model(tokens)
 
-    assert output.shape == (batch_size, 5), f"Expected (4, 5), got {output.shape}"
+    assert output.shape == (batch_size, 4), f"Expected (4, 4), got {output.shape}"
     print(f"✓ Forward pass: input {tuple(tokens.shape)} → output {tuple(output.shape)}")
 
 
@@ -57,7 +57,7 @@ def test_single_sample():
     tokens = torch.randint(0, 10, (1, 68))
     output = model(tokens)
 
-    assert output.shape == (1, 5)
+    assert output.shape == (1, 4)
     print(f"✓ Single sample: output shape {tuple(output.shape)}")
 
 
@@ -87,7 +87,7 @@ def test_predict_action():
     actions = model.predict_action(tokens)
 
     assert actions.shape == (3,), f"Expected shape (3,), got {actions.shape}"
-    assert all(0 <= a <= 4 for a in actions), "Actions should be in [0, 4]"
+    assert all(0 <= a <= 3 for a in actions), "Actions should be in [0, 3]"
 
     print(f"✓ Predicted actions: {actions.tolist()}")
 
@@ -99,7 +99,7 @@ def test_predict_action_probs():
 
     probs = model.predict_action_probs(tokens)
 
-    assert probs.shape == (2, 5)
+    assert probs.shape == (2, 4)
     assert torch.all(probs >= 0), "Probabilities should be >= 0"
     assert torch.all(probs <= 1), "Probabilities should be <= 1"
     assert torch.allclose(probs.sum(dim=-1), torch.ones(2)), "Should sum to 1"
@@ -135,7 +135,7 @@ def test_return_features():
 
     logits, features = model(tokens, return_features=True)
 
-    assert logits.shape == (2, 5)
+    assert logits.shape == (2, 4)
     assert features.shape == (2, 64), f"Expected (2, 64), got {features.shape}"
 
     print(f"✓ Return features: {tuple(features.shape)}")

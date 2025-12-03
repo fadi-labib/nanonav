@@ -82,9 +82,9 @@ def test_build_dataset_action_range():
     max_action = data['actions'].max().item()
 
     assert min_action >= 0, f"Min action {min_action} < 0"
-    assert max_action <= 4, f"Max action {max_action} > 4"
+    assert max_action <= 3, f"Max action {max_action} > 3"
 
-    print(f"✓ Action range: [{min_action}, {max_action}] (valid: 0-4)")
+    print(f"✓ Action range: [{min_action}, {max_action}] (valid: 0-3)")
 
 
 def test_build_dataset_action_distribution():
@@ -92,7 +92,7 @@ def test_build_dataset_action_distribution():
     data = build_dataset(num_samples=200, grid_size=8, base_seed=42)
 
     print("✓ Action distribution:")
-    for i in range(5):
+    for i in range(4):
         count = (data['actions'] == i).sum().item()
         pct = 100 * count / len(data['actions'])
         print(f"    {ACTION_NAMES[i]}: {count} ({pct:.1f}%)")

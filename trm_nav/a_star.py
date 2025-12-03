@@ -11,16 +11,16 @@ import numpy as np
 
 
 # Action definitions
-# 0: UP, 1: DOWN, 2: LEFT, 3: RIGHT, 4: STAY
+# 0: UP, 1: DOWN, 2: LEFT, 3: RIGHT
 ACTIONS = {
     0: (-1, 0),   # UP (decrease row)
     1: (1, 0),    # DOWN (increase row)
     2: (0, -1),   # LEFT (decrease col)
     3: (0, 1),    # RIGHT (increase col)
-    4: (0, 0),    # STAY
 }
 
-ACTION_NAMES = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT", 4: "STAY"}
+ACTION_NAMES = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
+NUM_ACTIONS = 4
 
 
 def heuristic(a: Tuple[int, int], b: Tuple[int, int]) -> float:
@@ -46,9 +46,6 @@ def get_neighbors(
     rows, cols = grid.shape
 
     for action_id, (dr, dc) in ACTIONS.items():
-        if action_id == 4:  # Skip STAY for pathfinding
-            continue
-
         new_row = pos[0] + dr
         new_col = pos[1] + dc
 
@@ -176,15 +173,15 @@ def get_next_action(
         goal: Goal position
 
     Returns:
-        Action ID (0-4), returns STAY (4) if at goal or no path
+        Action ID (0-3), returns -1 if at goal or no path exists
     """
     if current == goal:
-        return 4  # STAY
+        return -1  # Already at goal
 
     path = astar_path(grid, current, goal)
 
     if path is None or len(path) < 2:
-        return 4  # No path, stay
+        return -1  # No path exists
 
     actions = path_to_actions(path)
-    return actions[0] if actions else 4
+    return actions[0] if actions else -1
