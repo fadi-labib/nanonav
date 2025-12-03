@@ -48,3 +48,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Claude context (local only)
+CLAUDE.md
