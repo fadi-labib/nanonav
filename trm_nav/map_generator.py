@@ -67,8 +67,8 @@ def generate_solvable_map(
 
         # Randomly select start and goal from free cells
         indices = rng.choice(len(free_cells), size=2, replace=False)
-        start = free_cells[indices[0]]
-        goal = free_cells[indices[1]]
+        start = tuple(int(x) for x in free_cells[indices[0]])
+        goal = tuple(int(x) for x in free_cells[indices[1]])
 
         # Check if path exists
         path = astar_path(grid, start, goal)

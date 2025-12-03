@@ -38,7 +38,8 @@ python -m trm_nav.train \
     --weight-decay 0.01 \
     --lr 5e-4 \
     --epochs 100 \
-    --patience 20
+    --patience 20 \
+    --grid-size 16
 ```
 
 **Expected time**: ~30-60 minutes on GPU, ~2-4 hours on CPU

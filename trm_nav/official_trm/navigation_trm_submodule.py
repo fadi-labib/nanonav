@@ -45,7 +45,6 @@ class NavigationTRM(nn.Module):
         if not _TRM_AVAILABLE:
             raise ImportError(f"Official TRM not available: {_IMPORT_ERROR}. Please ensure the submodule is properly initialized.")
         else:
-            print("Using official Samsung SAIL Montreal TRM implementation")
             self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout)
     
     def _init_fallback(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout):
@@ -124,7 +123,11 @@ class NavigationTRM(nn.Module):
         # Initialize the official TRM
         self.trm = TinyRecursiveReasoningModel_ACTV1(config_dict)
         self.config = self.trm.config
-        
+        self.vocab_size = vocab_size
+
+        # Projection from vocab_size to hidden_size (TRM outputs vocab_size logits)
+        self.output_proj = nn.Linear(vocab_size, hidden_size)
+
         # Classification head
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_size),
@@ -181,13 +184,12 @@ class NavigationTRM(nn.Module):
             hidden = output['logits']  # (batch, seq_len, vocab_size)
             # Pool over sequence dimension and convert to float32
             pooled = hidden.float().mean(dim=1)  # (batch, vocab_size)
-            if pooled.shape[-1] != self.hidden_size:
-                # Project to correct hidden size
-                pooled = torch.mean(pooled.view(batch_size, -1, self.hidden_size), dim=1)
+            # Project from vocab_size to hidden_size
+            pooled = self.output_proj(pooled)  # (batch, hidden_size)
         else:
             # Fallback: use zeros
             pooled = torch.zeros(batch_size, self.hidden_size, device=device)
-        
+
         # Classify
         logits = self.classifier(pooled)
         return logits

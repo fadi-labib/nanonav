@@ -196,6 +196,9 @@ class NavigationDataset(Dataset):
         return len(self.actions)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Ensure idx is a Python int to avoid tensor indexing issues
+        if isinstance(idx, torch.Tensor):
+            idx = idx.item()
         return self.tokens[idx], self.actions[idx]
 
 
@@ -288,6 +291,10 @@ def build_dataset(
                 continue
 
             # Get actions for this path
+            if not isinstance(path, list):
+                print(f"ERROR: path is not a list! type={type(path)}, value={path}")
+                print(f"grid.shape={grid.shape}, start={start}, goal={goal}")
+                raise TypeError(f"path should be list, got {type(path)}")
             actions = path_to_actions(path)
 
             # Create training sample for each step
