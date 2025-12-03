@@ -44,17 +44,18 @@ def astar_path(grid: np.ndarray, start: Tuple, goal: Tuple) -> Optional[List[Tup
 ### Action Mapping
 
 ```python
-# Action IDs and their effects
+# Action IDs and their effects (4 actions - no STAY)
 ACTIONS = {
     0: (-1, 0),   # UP: row decreases
     1: (1, 0),    # DOWN: row increases
     2: (0, -1),   # LEFT: col decreases
     3: (0, 1),    # RIGHT: col increases
-    4: (0, 0),    # STAY: no movement
 }
 
-ACTION_NAMES = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT", 4: "STAY"}
+ACTION_NAMES = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
 ```
+
+**Note**: STAY action was removed because A* pathfinding never generates it (staying in place is never optimal for reaching a goal). Including it would create an unused output class.
 
 ### Path to Actions Conversion
 
@@ -235,32 +236,32 @@ def rotate_action_90(action: int) -> int:
     - What was DOWN (going to larger row) now goes LEFT (smaller col)
     - What was LEFT (going to smaller col) now goes UP (smaller row)
     """
-    # UP→RIGHT, RIGHT→DOWN, DOWN→LEFT, LEFT→UP, STAY→STAY
-    mapping = {0: 3, 1: 2, 2: 0, 3: 1, 4: 4}
+    # UP→RIGHT, RIGHT→DOWN, DOWN→LEFT, LEFT→UP
+    mapping = {0: 3, 1: 2, 2: 0, 3: 1}
     return mapping[action]
 
 def rotate_action_180(action: int) -> int:
     """Rotate action 180°."""
-    # UP→DOWN, DOWN→UP, LEFT→RIGHT, RIGHT→LEFT, STAY→STAY
-    mapping = {0: 1, 1: 0, 2: 3, 3: 2, 4: 4}
+    # UP→DOWN, DOWN→UP, LEFT→RIGHT, RIGHT→LEFT
+    mapping = {0: 1, 1: 0, 2: 3, 3: 2}
     return mapping[action]
 
 def rotate_action_270(action: int) -> int:
     """Rotate action 270° clockwise (= 90° counter-clockwise)."""
-    # UP→LEFT, LEFT→DOWN, DOWN→RIGHT, RIGHT→UP, STAY→STAY
-    mapping = {0: 2, 1: 3, 2: 1, 3: 0, 4: 4}
+    # UP→LEFT, LEFT→DOWN, DOWN→RIGHT, RIGHT→UP
+    mapping = {0: 2, 1: 3, 2: 1, 3: 0}
     return mapping[action]
 
 def flip_action_horizontal(action: int) -> int:
     """Flip action horizontally (mirror left-right)."""
-    # LEFT↔RIGHT, UP/DOWN/STAY unchanged
-    mapping = {0: 0, 1: 1, 2: 3, 3: 2, 4: 4}
+    # LEFT↔RIGHT, UP/DOWN unchanged
+    mapping = {0: 0, 1: 1, 2: 3, 3: 2}
     return mapping[action]
 
 def flip_action_vertical(action: int) -> int:
     """Flip action vertically (mirror up-down)."""
-    # UP↔DOWN, LEFT/RIGHT/STAY unchanged
-    mapping = {0: 1, 1: 0, 2: 2, 3: 3, 4: 4}
+    # UP↔DOWN, LEFT/RIGHT unchanged
+    mapping = {0: 1, 1: 0, 2: 2, 3: 3}
     return mapping[action]
 ```
 
@@ -346,28 +347,24 @@ This teaches the model that navigation principles are orientation-invariant.
 
 ### TRM Wrapper (`model.py`)
 
-The `tiny-recursive-model` library is designed for sequence-to-sequence tasks. For classification, we adapted it:
+The official Samsung SAIL Montreal TRM is used for navigation. Key insight: **use hidden states, not logits**.
 
 ```python
-class TRMNavigator(nn.Module):
+class NavigationTRM(nn.Module):
     def __init__(
         self,
         dim: int = 64,
         num_tokens: int = 256,
         seq_len: int = 68,
         depth: int = 2,
-        num_actions: int = 5,
-        max_recursion_steps: int = 8,
+        num_actions: int = 4,  # UP, DOWN, LEFT, RIGHT (no STAY)
+        max_recursion_steps: int = 30,
         dropout: float = 0.1,
     ):
         super().__init__()
 
-        # TRM with MLP-Mixer (required - no fallback)
-        self.trm = TinyRecursiveModel(
-            dim=dim,
-            num_tokens=num_tokens,
-            network=MLPMixer1D(dim=dim, depth=depth, seq_len=seq_len)
-        )
+        # Official TRM from Samsung SAIL Montreal
+        self.trm = TinyRecursiveReasoningModel_ACTV1(config_dict)
 
         # Classification head
         self.classifier = nn.Sequential(
@@ -380,27 +377,55 @@ class TRMNavigator(nn.Module):
         )
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        # Get embeddings
-        embedded = self.trm.input_embed(tokens)  # (batch, seq_len, dim)
+        # Run TRM forward pass
+        carry_after, output = self.trm.forward(carry, batch)
 
-        # Recursive refinement
-        features = embedded
-        for _ in range(self.max_recursion_steps):
-            features = self.trm.network(features)
+        # CRITICAL: Use hidden states (z_H), NOT logits!
+        # logits = next-token predictions (vocab_size=256) - WRONG for classification
+        # z_H = learned representations (hidden_size=64) - CORRECT
+        hidden = carry_after.inner_carry.z_H  # (batch, seq_len, hidden_size)
 
-        # Pool over sequence
-        features = features.mean(dim=1)  # (batch, dim)
-        features = self.feature_dropout(features)
+        # Use LAST 4 tokens (coordinates) - they've "seen" the entire grid
+        coord_hidden = hidden[:, -4:, :].float()  # (batch, 4, hidden_size)
+        pooled = coord_hidden.mean(dim=1)  # (batch, hidden_size)
 
-        return self.classifier(features)
+        return self.classifier(pooled)
 ```
+
+### Critical Architecture Fix (Dec 2024)
+
+**Problem**: Model was stuck at 29% accuracy (random chance).
+
+**Root Cause**: We were using `output['logits']` which are next-token predictions (shape: batch, seq_len, vocab_size=256), then mean-pooling over ALL 260 tokens.
+
+```
+BROKEN: Mean pooling over all tokens
+┌─────────────────────────────────────────────────────────┐
+│ [grid₁, grid₂, ..., grid₂₅₆, pos_r, pos_c, goal_r, goal_c] │
+│   ↓      ↓           ↓        ↓      ↓       ↓       ↓  │
+│ Average everything → 4 coordinate tokens are 1.5% of signal │
+│ Result: 29% accuracy (random chance)                     │
+└─────────────────────────────────────────────────────────┘
+
+FIXED: Use hidden states + last-4-token pooling
+┌─────────────────────────────────────────────────────────┐
+│ [grid₁, grid₂, ..., grid₂₅₆, pos_r, pos_c, goal_r, goal_c] │
+│                                  ↓      ↓       ↓       ↓  │
+│ Use z_H hidden states, pool only last 4 tokens           │
+│ Result: 50-70%+ accuracy (learning!)                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Solution**:
+1. Use `carry_after.inner_carry.z_H` (hidden states) instead of `output['logits']`
+2. Pool only the last 4 tokens (coordinates) instead of all 260 tokens
 
 ### Key Design Decisions
 
-1. **Mean pooling**: Average over sequence dimension for fixed-size output
-2. **Recursive refinement**: Apply network N times (default 8)
-3. **Dropout placement**: After pooling and in classifier head
-4. **No fallback**: Requires tiny-recursive-model (the whole point is to test TRM)
+1. **Hidden states, not logits**: TRM outputs next-token predictions - useless for classification
+2. **Last-4-token pooling**: Coordinate tokens have "seen" entire grid via attention
+3. **4 actions only**: STAY removed (A* never generates it)
+4. **No fallback**: Requires official Samsung TRM (the whole point is to test TRM)
 
 ### Parameter Counts
 
@@ -528,7 +553,36 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
 ## Lessons Learned
 
-### 1. Overfitting is the Main Challenge
+### 1. Use Hidden States, Not Logits (Critical!)
+
+**Symptom**: Model stuck at random accuracy (~25% for 4 classes), cannot learn even from tiny dataset
+
+**Root cause**: Using TRM's `output['logits']` which are next-token predictions, not hidden representations
+
+**Solution**: Use `carry_after.inner_carry.z_H` which contains the actual learned hidden states
+
+**How to verify**: If a simple MLP can learn the task but your model can't, the architecture is extracting wrong features
+
+```python
+# WRONG - logits are next-token predictions
+pooled = output['logits'].mean(dim=1)
+
+# RIGHT - z_H contains learned representations
+hidden = carry_after.inner_carry.z_H
+pooled = hidden[:, -4:, :].mean(dim=1)  # Use coordinate tokens
+```
+
+### 2. Pooling Strategy Matters
+
+**Symptom**: Model learns slowly, poor accuracy despite correct hidden states
+
+**Root cause**: Mean pooling over ALL tokens dilutes important coordinate information
+
+**Solution**: Pool only the last 4 tokens (coordinates: start_row, start_col, goal_row, goal_col)
+
+These tokens have "seen" the entire grid via attention and contain the most decision-relevant information.
+
+### 3. Overfitting is the Main Challenge
 
 **Symptom**: Train accuracy 100%, validation accuracy ~70%
 

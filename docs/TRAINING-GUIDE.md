@@ -259,14 +259,15 @@ Bad: Both losses stay high, accuracies plateau early
 2. Enable gradient clipping (already enabled by default)
 3. Check for data issues
 
-### Issue: Accuracy stuck at ~20%
+### Issue: Accuracy stuck at ~25%
 
-This is random chance (1/5 actions).
+This is random chance (1/4 actions).
 
 **Solutions**:
 1. Check data generation: Are paths valid?
 2. Check encoding: Are tokens correct?
 3. Try smaller model first to verify pipeline
+4. **Most likely**: Verify using hidden states, not logits (see IMPLEMENTATION-NOTES.md)
 
 ### Issue: Perfect train accuracy but low validation
 
