@@ -1,20 +1,28 @@
 # NanoNav PoC Dependencies
 
 # Core ML
-torch>=2.0
-numpy>=1.24
+torch>=2.0.0
+numpy>=1.24.0
 
 # Visualization
-matplotlib>=3.7
+matplotlib>=3.7.0
 
 # Graph algorithms (for A*)
 networkx>=3.0
 
 # Progress bars
-tqdm>=4.65
+tqdm>=4.65.0
 
-# TRM model
+# TRM model - Required for TRM model functionality
 tiny-recursive-model>=0.0.1
 
 # Testing (optional)
-pytest>=7.0
+pytest>=7.0.0
+
+# Additional standard library dependencies (usually included but explicit for clarity)
+# typing - included in Python 3.5+
+# pathlib - included in Python 3.4+
+# json - standard library
+# sys - standard library
+# argparse - standard library
+# heapq - standard library
