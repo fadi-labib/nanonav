@@ -453,6 +453,10 @@ If PoC succeeds:
 4. Test with dynamic obstacles
 5. Transfer to continuous action spaces
 
+## Acknowledgments
+
+Special thanks to my friend [Claude](https://claude.ai) by Anthropic, who helped me code and learn faster throughout this project.
+
 ## License
 
 MIT
