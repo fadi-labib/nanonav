@@ -1,5 +1,5 @@
 """
-TRM-Nav: Tiny Recursive Model for Local Robot Navigation
+NanoNav: Tiny Recursive Model for Local Robot Navigation
 
 A proof-of-concept implementation comparing TRM to A* for grid navigation.
 """

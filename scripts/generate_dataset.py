@@ -18,7 +18,7 @@ from trm_nav.dataset import build_dataset, save_dataset
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate TRM-Nav Dataset")
+    parser = argparse.ArgumentParser(description="Generate NanoNav Dataset")
     parser.add_argument("--num-train", type=int, default=5000,
                         help="Number of training samples")
     parser.add_argument("--num-test", type=int, default=500,
@@ -39,7 +39,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 50)
-    print("TRM-Nav Dataset Generation")
+    print("NanoNav Dataset Generation")
     print("=" * 50)
     print(f"Grid size:        {args.grid_size}x{args.grid_size}")
     print(f"Obstacle density: {args.obstacle_density}")

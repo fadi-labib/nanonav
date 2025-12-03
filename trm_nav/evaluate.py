@@ -201,7 +201,7 @@ def benchmark(
 def print_benchmark_table(summary: Dict) -> None:
     """Print formatted benchmark results."""
     print("\n" + "=" * 50)
-    print("TRM-Nav PoC Benchmark Results")
+    print("NanoNav PoC Benchmark Results")
     print("=" * 50)
     print(f"Grid Size: {summary['grid_size']}x{summary['grid_size']}")
     print(f"Episodes:  {summary['num_episodes']}")

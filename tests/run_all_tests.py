@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def main():
     print("=" * 60)
-    print("TRM-Nav Test Suite")
+    print("NanoNav Test Suite")
     print("=" * 60)
 
     from tests import test_a_star

@@ -45,7 +45,7 @@ def main():
         device = torch.device(args.device)
 
     print("=" * 50)
-    print("TRM-Nav Benchmark")
+    print("NanoNav Benchmark")
     print("=" * 50)
     print(f"Device:     {device}")
     print(f"Checkpoint: {args.checkpoint}")

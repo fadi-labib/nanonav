@@ -1,4 +1,4 @@
-# TRM-Nav: Tiny Recursive Model for Local Navigation
+# NanoNav: Tiny Recursive Model for Local Navigation
 
 A proof-of-concept implementation comparing Tiny Recursive Models (TRM) to A* for grid-based navigation. This project demonstrates how to train a neural network to imitate optimal pathfinding behavior using behavioral cloning.
 
@@ -429,7 +429,7 @@ Monitoring validation loss and stopping training when it stops improving. Preven
 After proper training with augmentation:
 
 ```
-=== TRM-Nav Benchmark Results ===
+=== NanoNav Benchmark Results ===
 
 Grid Size: 8x8
 Episodes:  100

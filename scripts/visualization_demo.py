@@ -2,7 +2,7 @@
 """
 Visualization Demo
 
-Showcases all visualization capabilities of TRM-Nav.
+Showcases all visualization capabilities of NanoNav.
 
 Usage:
     python scripts/visualization_demo.py
@@ -232,7 +232,7 @@ def demo_animation(save: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="TRM-Nav Visualization Demo")
+    parser = argparse.ArgumentParser(description="NanoNav Visualization Demo")
     parser.add_argument("--save", action="store_true",
                         help="Save plots to results/plots/")
     parser.add_argument("--demo", type=int, default=0,
@@ -240,7 +240,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("TRM-Nav Visualization Demo")
+    print("NanoNav Visualization Demo")
     print("=" * 60)
 
     if args.save:

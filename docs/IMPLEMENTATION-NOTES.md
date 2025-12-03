@@ -1,6 +1,6 @@
 # Implementation Notes
 
-This document contains detailed technical notes on the TRM-Nav implementation, including design decisions, lessons learned, and code patterns that can be reused in other projects.
+This document contains detailed technical notes on the NanoNav implementation, including design decisions, lessons learned, and code patterns that can be reused in other projects.
 
 ## Table of Contents
 

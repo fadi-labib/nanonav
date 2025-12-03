@@ -1,4 +1,4 @@
-# TRM-Nav PoC Dependencies
+# NanoNav PoC Dependencies
 
 # Core ML
 torch>=2.0
