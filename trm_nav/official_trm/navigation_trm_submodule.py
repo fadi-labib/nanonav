@@ -127,10 +127,7 @@ class NavigationTRM(nn.Module):
         self.config = self.trm.config
         self.vocab_size = vocab_size
 
-        # Projection from vocab_size to hidden_size (TRM outputs vocab_size logits)
-        self.output_proj = nn.Linear(vocab_size, hidden_size)
-
-        # Classification head
+        # Classification head (hidden states are already in hidden_size dimension)
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_size),
             nn.Dropout(dropout),
@@ -179,18 +176,18 @@ class NavigationTRM(nn.Module):
             carry = self.trm.initial_carry(batch)
         
         # Run forward pass
-        carry, output = self.trm.forward(carry, batch)
-        
-        # Extract logits from output
-        if 'logits' in output:
-            hidden = output['logits']  # (batch, seq_len, vocab_size)
-            # Pool over sequence dimension and convert to float32
-            pooled = hidden.float().mean(dim=1)  # (batch, vocab_size)
-            # Project from vocab_size to hidden_size
-            pooled = self.output_proj(pooled)  # (batch, hidden_size)
-        else:
-            # Fallback: use zeros
-            pooled = torch.zeros(batch_size, self.hidden_size, device=device)
+        carry_after, output = self.trm.forward(carry, batch)
+
+        # Extract HIDDEN STATES (not logits!) from the TRM
+        # z_H = high-level reasoning state, shape (batch, seq_len, hidden_size)
+        # This is the actual learned representation, NOT next-token predictions
+        hidden = carry_after.inner_carry.z_H  # (batch, seq_len, hidden_size)
+
+        # Use LAST 4 tokens (coordinates: start_row, start_col, goal_row, goal_col)
+        # These have "seen" the entire grid via attention and contain
+        # the most relevant information for deciding the action
+        coord_hidden = hidden[:, -4:, :].float()  # (batch, 4, hidden_size)
+        pooled = coord_hidden.mean(dim=1)  # (batch, hidden_size)
 
         # Classify
         logits = self.classifier(pooled)
