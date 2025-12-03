@@ -8,6 +8,60 @@ Prove that TRM can achieve **comparable results to A*** on grid navigation tasks
 - Success rate ≥ 85%
 - Path length ratio ≤ 1.3 (TRM path / A* optimal path)
 
+## Background & Motivation
+
+### The Tiny Recursive Model (TRM)
+
+This project is based on the **Tiny Recursive Model (TRM)** architecture introduced by Samsung SAIL Montreal:
+
+> **"Less is More: Recursive Reasoning with Tiny Networks"**
+> Alexia Jolicoeur-Martineau, Samsung SAIL Montreal, 2025
+> [arXiv:2510.04871](https://arxiv.org/abs/2510.04871)
+>
+> Official implementation: [SamsungSAILMontreal/TinyRecursiveModels](https://github.com/SamsungSAILMontreal/TinyRecursiveModels)
+
+The key insight of TRM is that **recursive computation can substitute for model depth**. Instead of building deeper networks with more parameters, TRM applies a smaller network multiple times to iteratively refine its representations. This mimics how humans often "think twice" about a problem, revisiting and refining their reasoning.
+
+### Core Concept: Recursive Refinement
+
+```
+Traditional Deep Network:          TRM Approach:
+
+Input → Layer1 → Layer2 → ...      Input → Small Network ─┐
+      → LayerN → Output                    ↑              │
+                                           └──── Loop N times
+(Many parameters, single pass)            ↓
+                                         Output
+                                   (Fewer parameters, multiple passes)
+```
+
+**How it works:**
+1. Input is embedded into a latent representation
+2. A small network (MLP-Mixer) processes the representation
+3. The output is fed back as input for another refinement pass
+4. After N iterations, the refined representation is used for prediction
+
+### Why TRM for Navigation?
+
+Navigation is an interesting testbed for recursive reasoning because:
+
+1. **Iterative Decision Making**: Real navigation involves continuously reassessing your position relative to the goal. TRM's recursive passes mirror this "look-think-adjust" loop.
+
+2. **Spatial Reasoning**: Finding a path requires understanding spatial relationships between obstacles, current position, and goal. Multiple refinement passes allow the model to propagate information across the grid representation.
+
+3. **Efficiency vs. Capability Trade-off**: Traditional pathfinding (A*) is optimal but requires explicit graph search. Can a tiny learned model with recursive refinement achieve comparable results? This is the core research question.
+
+4. **Resource-Constrained Deployment**: For embedded robotics (the "nano" in nanopilot), having a small model that can "think longer" on hard problems is more practical than a large model that's fast but memory-hungry.
+
+### Research Questions
+
+This PoC explores:
+
+- Can behavioral cloning from A* demonstrations teach spatial reasoning?
+- Does recursive refinement help with navigation decisions?
+- What's the trade-off between model size, recursion depth, and accuracy?
+- How does a learned policy generalize to unseen grid configurations?
+
 ## Quick Start
 
 ```bash
