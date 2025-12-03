@@ -1,6 +1,6 @@
 # NanoNav: Tiny Recursive Model for Local Navigation
 
-A proof-of-concept implementation comparing Tiny Recursive Models (TRM) to A* for grid-based navigation. This project demonstrates how to train a neural network to imitate optimal pathfinding behavior using behavioral cloning.
+A proof-of-concept implementation using the **official Samsung SAIL Montreal TRM** for grid-based navigation. This project demonstrates how to train a neural network to imitate optimal pathfinding behavior using behavioral cloning with recursive reasoning.
 
 ## Goal
 
@@ -65,12 +65,19 @@ This PoC explores:
 ## Quick Start
 
 ```bash
-# 1. Create virtual environment
+# 1. Clone with submodules (includes official TRM)
+git clone --recursive https://github.com/your-repo/nanonav.git
+cd nanonav
+
+# 2. Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # or: venv\Scripts\activate  # Windows
 
-# 2. Install dependencies
+# 3. Install PyTorch nightly (required for official TRM)
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+
+# 4. Install dependencies
 # Option A: Using pip (traditional)
 pip install -r requirements.txt
 
@@ -78,16 +85,16 @@ pip install -r requirements.txt
 # First install Poetry: https://python-poetry.org/docs/#installation
 poetry install
 
-# 3. Generate training data (with augmentation for better results)
+# 5. Generate training data (with augmentation for better results)
 python scripts/generate_dataset.py --num-train 50000 --augment
 
-# 4. Train the model
-python -m trm_nav.train --dim 128 --depth 3 --dropout 0.15
+# 6. Train with GPU (official TRM + RTX 4080/4090 support)
+python -m trm_nav.train --device cuda --grid-size 16 --max-recursion 64
 
-# 5. Visual test
+# 7. Visual test
 python scripts/test_trm_visual.py --checkpoint checkpoints/best.pt
 
-# 6. Full benchmark
+# 8. Full benchmark
 python scripts/run_benchmark.py --checkpoint checkpoints/best.pt
 ```
 
@@ -100,10 +107,15 @@ trm_nav/
 │   ├── a_star.py              # A* pathfinding algorithm (teacher/oracle)
 │   ├── map_generator.py       # Random solvable map generation
 │   ├── dataset.py             # Dataset creation with augmentation
-│   ├── model.py               # TRM model wrapper (requires tiny-recursive-model)
-│   ├── train.py               # Training loop with regularization
+│   ├── model.py               # TRM model wrapper (uses official Samsung TRM)
+│   ├── train.py               # Training loop with GPU support and regularization
 │   ├── evaluate.py            # Benchmarking and rollouts
-│   └── visualize.py           # ASCII and matplotlib visualization
+│   ├── visualize.py           # ASCII and matplotlib visualization
+│   └── official_trm/          # Official Samsung SAIL Montreal TRM integration
+│       ├── navigation_trm_submodule.py  # Navigation wrapper for official TRM
+│       └── ...                # TRM implementation files
+├── external/                  # Git submodules
+│   └── trm/                   # Official Samsung TRM repository (submodule)
 ├── scripts/
 │   ├── generate_dataset.py    # Dataset generation script
 │   ├── run_benchmark.py       # Full evaluation benchmark
@@ -208,18 +220,42 @@ Enable with `--augment` flag. Generates 8 versions of each sample:
 | Early Stopping | `--patience` | 15 | Stops when val_loss stops improving |
 | Gradient Clipping | - | 1.0 | Prevents exploding gradients |
 
+### Official TRM Integration 🎉
+
+This project now uses the **official Samsung SAIL Montreal TRM implementation** instead of the unofficial `tiny-recursive-model` library.
+
+**Key improvements:**
+- ✅ **Authentic TRM**: Uses the exact same model that achieved 45% on ARC-AGI-1
+- ✅ **GPU Support**: Full CUDA support with RTX 4080/4090 compatibility
+- ✅ **Better Performance**: ~67 it/s on GPU vs ~7 it/s on CPU
+- ✅ **Larger Models**: Support for 16x16+ grids with 64+ recursion steps
+
+**Requirements:**
+- PyTorch 2.10.0+ nightly (automatically handles device management)
+- CUDA 12.6+ for GPU training
+- Git submodule for official TRM code
+
+```bash
+# Install PyTorch nightly (required)
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+
+# Train with official TRM on GPU
+python -m trm_nav.train --device cuda --grid-size 16 --max-recursion 64 --batch-size 16
+```
+
 ### Model Configuration
 
 | Parameter | Flag | Default | Description |
 |-----------|------|---------|-------------|
 | Dimension | `--dim` | 64 | Hidden layer size (64, 128, 256) |
-| Depth | `--depth` | 2 | Number of MLP-Mixer layers |
-| Recursion | `max_recursion_steps` | 8 | TRM refinement iterations |
+| Depth | `--depth` | 2 | Number of layers (compatibility only) |
+| Recursion | `--max-recursion` | 8 | TRM recursive reasoning cycles |
+| Grid Size | `--grid-size` | 8 | Grid dimensions (8, 16, 32) |
 
-**Scaling guidance**:
-- Small (fast): `--dim 64 --depth 2` (~50K params)
-- Medium: `--dim 128 --depth 3` (~200K params)
-- Large: `--dim 256 --depth 4` (~800K params)
+**Scaling guidance:**
+- Small (8x8): `--dim 64 --max-recursion 8` (~169K params)
+- Medium (16x16): `--dim 128 --max-recursion 32` (~200K+ params) 
+- Large (32x32): `--dim 256 --max-recursion 64` (~500K+ params)
 
 
 python -m trm_nav.train \
@@ -260,33 +296,37 @@ python scripts/generate_dataset.py \
 ### Training
 
 ```bash
-# Basic training
+# Basic training (8x8 grid, CPU)
 python -m trm_nav.train
 
-# Recommended settings (after overfitting fix)
+# GPU training with official TRM (recommended)
+python -m trm_nav.train --device cuda --grid-size 16 --max-recursion 32
+
+# Full 16x16 training with optimal settings
 python -m trm_nav.train \
+    --device cuda \
+    --grid-size 16 \
     --dim 128 \
-    --depth 3 \
-    --dropout 0.15 \
-    --weight-decay 0.01 \
-    --lr 5e-4 \
-    --patience 15 \
-    --epochs 100
+    --max-recursion 64 \
+    --batch-size 16 \
+    --lr 1e-3 \
+    --epochs 50
 
 # All options
 python -m trm_nav.train \
     --train-path data/train.pt \
     --val-path data/test.pt \
     --checkpoint-dir checkpoints \
-    --grid-size 8 \
+    --grid-size 16 \
     --dim 128 \
-    --depth 3 \
-    --dropout 0.15 \
-    --batch-size 64 \
-    --lr 5e-4 \
+    --depth 2 \
+    --dropout 0.1 \
+    --batch-size 16 \
+    --lr 1e-3 \
     --weight-decay 0.01 \
-    --epochs 100 \
+    --epochs 50 \
     --patience 15 \
+    --max-recursion 64 \
     --device cuda
 ```
 
@@ -345,24 +385,40 @@ Epoch 45/100 - Train Loss: 0.1234, Train Acc: 0.9567 Val Loss: 0.2345, Val Acc: 
 
 ## Troubleshooting
 
-### TRM Library API Issue
+### Official TRM Integration Issues
 
-If you see:
+**PyTorch Version Error:**
 ```
-TypeError: TinyRecursiveModel.forward() missing 2 required positional arguments
+AttributeError: module 'torch.nn' has no attribute 'Buffer'
+```
+**Solution**: Install PyTorch nightly (required for official TRM):
+```bash
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
 ```
 
-**Cause**: The `tiny-recursive-model` library is designed for sequence-to-sequence tasks, not classification.
+**Device Mismatch Error:**
+```
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+```
+**Solution**: This is automatically handled by the navigation wrapper. Ensure you're using `--device cuda`.
 
-**Solution**: The model wrapper (`model.py`) uses the internal components directly:
-```python
-# Instead of: output = self.trm(tokens)
-# We use:
-embedded = self.trm.input_embed(tokens)
-features = embedded
-for _ in range(self.max_recursion_steps):
-    features = self.trm.network(features)
-features = features.mean(dim=1)  # Pool for classification
+**Submodule Missing:**
+```
+ImportError: Official TRM not available: No module named 'models'
+```
+**Solution**: Initialize the git submodule:
+```bash
+git submodule update --init --recursive
+```
+
+**CUDA Driver Issues (RTX 4080/4090):**
+If you get segfaults or CUDA errors:
+```bash
+# Check CUDA version
+nvidia-smi
+
+# Ensure PyTorch nightly matches your CUDA version
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
 ```
 
 ### Overfitting (Train Acc >> Val Acc)
@@ -406,14 +462,25 @@ This script:
 
 ## Dependencies
 
-Install with:
+**Important**: Official TRM requires PyTorch 2.10.0+ nightly. Install in this order:
+
 ```bash
+# 1. Install PyTorch nightly first (required for official TRM)
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+
+# 2. Install other dependencies
 # Using pip
 pip install -r requirements.txt
 
-# Using Poetry
+# Using Poetry  
 poetry install
 ```
+
+**Key dependencies:**
+- `torch>=2.10.0` (nightly with CUDA 12.6 support)
+- `adam-atan2>=0.0.3` (official TRM optimizer)
+- `einops>=0.8.1` (tensor operations)
+- `pydantic>=2.8.0` (configuration validation)
 
 Both `requirements.txt` and `pyproject.toml` contain the same dependencies for maximum compatibility.
 
