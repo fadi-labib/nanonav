@@ -95,7 +95,7 @@ trm_nav/
 │   ├── a_star.py              # A* pathfinding algorithm (teacher/oracle)
 │   ├── map_generator.py       # Random solvable map generation
 │   ├── dataset.py             # Dataset creation with augmentation
-│   ├── model.py               # TRM model wrapper with fallback
+│   ├── model.py               # TRM model wrapper (requires tiny-recursive-model)
 │   ├── train.py               # Training loop with regularization
 │   ├── evaluate.py            # Benchmarking and rollouts
 │   └── visualize.py           # ASCII and matplotlib visualization

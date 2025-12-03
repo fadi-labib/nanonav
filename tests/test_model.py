@@ -12,16 +12,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 import torch
-from trm_nav.model import create_model, TRMNavigator, HAS_TRM
+from trm_nav.model import create_model, TRMNavigator
 from trm_nav.dataset import encode_state
 from trm_nav.a_star import ACTION_NAMES
 
 
 def test_trm_available():
-    """Check if TRM library is available."""
-    print(f"✓ tiny-recursive-model available: {HAS_TRM}")
-    if not HAS_TRM:
-        print("  (Using fallback implementation)")
+    """Check if TRM library is available (required - no fallback)."""
+    # If we get here, TRM is available (import would fail otherwise)
+    print("✓ tiny-recursive-model available: True (required)")
 
 
 def test_model_creation():

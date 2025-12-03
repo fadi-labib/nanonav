@@ -2,65 +2,22 @@
 TRM Model Wrapper
 
 Wraps the tiny-recursive-model library for navigation task.
+Requires tiny-recursive-model to be installed - no fallback.
 """
 
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
-import numpy as np
 
-# Try to import tiny-recursive-model, fall back to simple implementation
+# Import tiny-recursive-model - fail hard if not available
 try:
     from tiny_recursive_model import TinyRecursiveModel, MLPMixer1D
-    HAS_TRM = True
 except ImportError:
-    HAS_TRM = False
-    print("Warning: tiny-recursive-model not installed. Using fallback implementation.")
-
-
-class FallbackMixer(nn.Module):
-    """Simple MLP mixer fallback if tiny-recursive-model not available."""
-
-    def __init__(self, dim: int, seq_len: int, depth: int = 2, dropout: float = 0.1):
-        super().__init__()
-        self.dim = dim
-        self.seq_len = seq_len
-
-        layers = []
-        for _ in range(depth):
-            layers.extend([
-                nn.LayerNorm(dim),
-                nn.Linear(dim, dim * 4),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(dim * 4, dim),
-                nn.Dropout(dropout),
-            ])
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, x):
-        # x: (batch, seq_len, dim)
-        return x + self.layers(x)
-
-
-class FallbackTRM(nn.Module):
-    """Fallback TRM implementation without recursive refinement."""
-
-    def __init__(self, dim: int, num_tokens: int, seq_len: int, depth: int = 2, dropout: float = 0.1):
-        super().__init__()
-        self.embedding = nn.Embedding(num_tokens, dim)
-        self.mixer = FallbackMixer(dim, seq_len, depth, dropout)
-        self.norm = nn.LayerNorm(dim)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        # x: (batch, seq_len) of token ids
-        x = self.embedding(x)
-        x = self.dropout(x)
-        x = self.mixer(x)
-        x = self.norm(x)
-        # Pool over sequence
-        return x.mean(dim=1)
+    raise ImportError(
+        "tiny-recursive-model is required but not installed.\n"
+        "Install it with: pip install tiny-recursive-model\n"
+        "Or from source: pip install git+https://github.com/lucidrains/tiny-recursive-model.git"
+    )
 
 
 class TRMNavigator(nn.Module):
@@ -91,30 +48,19 @@ class TRMNavigator(nn.Module):
         self.num_actions = num_actions
         self.max_recursion_steps = max_recursion_steps
         self.halt_prob_thres = halt_prob_thres
-        self.use_trm = HAS_TRM
         self.dropout_rate = dropout
 
-        if HAS_TRM:
-            self.trm = TinyRecursiveModel(
+        # TRM with MLP-Mixer network
+        self.trm = TinyRecursiveModel(
+            dim=dim,
+            num_tokens=num_tokens,
+            network=MLPMixer1D(
                 dim=dim,
-                num_tokens=num_tokens,
-                network=MLPMixer1D(
-                    dim=dim,
-                    depth=depth,
-                    seq_len=seq_len
-                )
-            )
-            # We'll use TRM's embedding for feature extraction
-            self.embedding = None  # Use trm.input_embed
-            self.feature_dropout = nn.Dropout(dropout)
-        else:
-            self.trm = FallbackTRM(
-                dim=dim,
-                num_tokens=num_tokens,
-                seq_len=seq_len,
                 depth=depth,
-                dropout=dropout
+                seq_len=seq_len
             )
+        )
+        self.feature_dropout = nn.Dropout(dropout)
 
         # Classification head: pool sequence then classify
         self.classifier = nn.Sequential(
@@ -143,28 +89,19 @@ class TRMNavigator(nn.Module):
         Returns:
             action_logits: (batch, num_actions)
         """
-        refinement_steps = None
+        # Get embeddings
+        embedded = self.trm.input_embed(tokens)  # (batch, seq_len, dim)
 
-        if self.use_trm:
-            # TRM predict returns (output_logits, refinement_steps)
-            # output_logits shape: (batch, seq_len, num_tokens)
-            # We need features, so we use the internal embedding + network
+        # Apply the network (MLP-Mixer) for recursive refinement
+        features = embedded
+        for _ in range(self.max_recursion_steps):
+            features = self.trm.network(features)
 
-            # Get embeddings
-            embedded = self.trm.input_embed(tokens)  # (batch, seq_len, dim)
+        # Pool over sequence dimension
+        features = features.mean(dim=1)  # (batch, dim)
+        features = self.feature_dropout(features)
 
-            # Apply the network (MLP-Mixer) for refinement
-            # Do multiple refinement passes like TRM does
-            features = embedded
-            for _ in range(self.max_recursion_steps):
-                features = self.trm.network(features)
-
-            # Pool over sequence dimension
-            features = features.mean(dim=1)  # (batch, dim)
-            features = self.feature_dropout(features)  # Apply dropout
-            refinement_steps = torch.tensor([self.max_recursion_steps] * tokens.shape[0])
-        else:
-            features = self.trm(tokens)  # Already returns (batch, dim)
+        refinement_steps = torch.tensor([self.max_recursion_steps] * tokens.shape[0])
 
         # Classify
         logits = self.classifier(features)

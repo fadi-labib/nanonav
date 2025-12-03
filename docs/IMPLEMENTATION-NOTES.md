@@ -362,14 +362,12 @@ class TRMNavigator(nn.Module):
     ):
         super().__init__()
 
-        if HAS_TRM:
-            self.trm = TinyRecursiveModel(
-                dim=dim,
-                num_tokens=num_tokens,
-                network=MLPMixer1D(dim=dim, depth=depth, seq_len=seq_len)
-            )
-        else:
-            self.trm = FallbackTRM(...)  # Simple MLP fallback
+        # TRM with MLP-Mixer (required - no fallback)
+        self.trm = TinyRecursiveModel(
+            dim=dim,
+            num_tokens=num_tokens,
+            network=MLPMixer1D(dim=dim, depth=depth, seq_len=seq_len)
+        )
 
         # Classification head
         self.classifier = nn.Sequential(
@@ -382,19 +380,17 @@ class TRMNavigator(nn.Module):
         )
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        if self.use_trm:
-            # Use internal components for classification
-            embedded = self.trm.input_embed(tokens)  # (batch, seq_len, dim)
+        # Get embeddings
+        embedded = self.trm.input_embed(tokens)  # (batch, seq_len, dim)
 
-            features = embedded
-            for _ in range(self.max_recursion_steps):
-                features = self.trm.network(features)
+        # Recursive refinement
+        features = embedded
+        for _ in range(self.max_recursion_steps):
+            features = self.trm.network(features)
 
-            # Pool over sequence
-            features = features.mean(dim=1)  # (batch, dim)
-            features = self.feature_dropout(features)
-        else:
-            features = self.trm(tokens)
+        # Pool over sequence
+        features = features.mean(dim=1)  # (batch, dim)
+        features = self.feature_dropout(features)
 
         return self.classifier(features)
 ```
@@ -404,7 +400,7 @@ class TRMNavigator(nn.Module):
 1. **Mean pooling**: Average over sequence dimension for fixed-size output
 2. **Recursive refinement**: Apply network N times (default 8)
 3. **Dropout placement**: After pooling and in classifier head
-4. **Fallback mode**: Works without TRM library installed
+4. **No fallback**: Requires tiny-recursive-model (the whole point is to test TRM)
 
 ### Parameter Counts
 
@@ -626,21 +622,21 @@ for epoch in range(max_epochs):
             break
 ```
 
-### Pattern: Fallback Implementation
+### Pattern: Required Dependency (Fail Hard)
 
 ```python
+# Fail hard if required library not available
 try:
     from external_library import Model
-    HAS_LIBRARY = True
 except ImportError:
-    HAS_LIBRARY = False
+    raise ImportError(
+        "external_library is required but not installed.\n"
+        "Install with: pip install external_library"
+    )
 
 class MyModel(nn.Module):
     def __init__(self):
-        if HAS_LIBRARY:
-            self.model = Model(...)
-        else:
-            self.model = SimpleFallback(...)
+        self.model = Model(...)  # No fallback - the whole point is to test this
 ```
 
 ---
