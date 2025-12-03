@@ -71,7 +71,12 @@ source venv/bin/activate  # Linux/Mac
 # or: venv\Scripts\activate  # Windows
 
 # 2. Install dependencies
+# Option A: Using pip (traditional)
 pip install -r requirements.txt
+
+# Option B: Using Poetry (modern package manager)
+# First install Poetry: https://python-poetry.org/docs/#installation
+poetry install
 
 # 3. Generate training data (with augmentation for better results)
 python scripts/generate_dataset.py --num-train 50000 --augment
@@ -215,6 +220,19 @@ Enable with `--augment` flag. Generates 8 versions of each sample:
 - Small (fast): `--dim 64 --depth 2` (~50K params)
 - Medium: `--dim 128 --depth 3` (~200K params)
 - Large: `--dim 256 --depth 4` (~800K params)
+
+
+python -m trm_nav.train \
+    --dim 256 \
+    --depth 4 \
+    --dropout 0.15 \
+    --weight-decay 0.01 \
+    --lr 3e-4 \
+    --epochs 100 \
+    --patience 25 \
+    --grid-size 16 \
+    --max-recursion 40
+
 
 ## Command Reference
 
@@ -371,21 +389,33 @@ python -c "import torch; print(torch.cuda.is_available())"
 python -m trm_nav.train --device cpu
 ```
 
-## Dependencies
+### Training Crashes or Segfaults
 
+If training crashes unexpectedly, use the debug script for minimal reproduction:
+
+```bash
+# Run minimal training debug
+python debug_train.py
 ```
-torch>=2.0.0
-numpy>=1.21.0
-matplotlib>=3.5.0
-networkx>=2.6.0
-tqdm>=4.62.0
-tiny-recursive-model>=0.1.0
-```
+
+This script:
+- Uses small batch sizes (4 samples)
+- Tests only 3 batches
+- Provides detailed error tracking
+- Helps isolate segfault sources
+
+## Dependencies
 
 Install with:
 ```bash
+# Using pip
 pip install -r requirements.txt
+
+# Using Poetry
+poetry install
 ```
+
+Both `requirements.txt` and `pyproject.toml` contain the same dependencies for maximum compatibility.
 
 ## File Descriptions
 

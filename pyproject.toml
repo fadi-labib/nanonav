@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "trm-nav"
+version = "0.1.0"
+description = "NanoNav: A minimal navigation AI using Tiny Recursive Model"
+authors = ["Fadi Abib <github@fadilabib.com>"]
+readme = "README.md"
+packages = [{include = "trm_nav"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+torch = "2.9.1"
+torchvision = "0.24.1"
+torchaudio = "2.9.1"
+numpy = "2.3.5"
+matplotlib = "3.10.7"
+networkx = "3.5"
+tqdm = "4.67.1"
+tiny-recursive-model = "0.0.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "9.0.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,3 @@
+[submodule "external/trm"]
+	path = external/trm
+	url = https://github.com/SamsungSAILMontreal/TinyRecursiveModels.git
