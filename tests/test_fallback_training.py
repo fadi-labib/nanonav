@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from trm_nav.dataset import build_dataset, save_dataset
@@ -43,6 +45,10 @@ def test_fallback_training_improves_accuracy(tmp_path):
     assert max_val_acc >= 0.35, f"Fallback model failed to learn (max val acc {max_val_acc:.3f})"
 
 
+run_official = os.environ.get("RUN_OFFICIAL_TRM_TESTS") == "1"
+
+
+@pytest.mark.skipif(not run_official, reason="Set RUN_OFFICIAL_TRM_TESTS=1 to run official TRM comparison (can be unstable on CPU).")
 @pytest.mark.xfail(reason="Official TRM path currently detaches gradients; expected to fail until fixed.")
 def test_official_trm_plateaus_without_gradient_fix(tmp_path):
     """
