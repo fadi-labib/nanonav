@@ -1,3 +1,3 @@
 # Official Samsung SAIL Montreal TRM implementation
-# Only expose our navigation wrapper to avoid import issues
-from .navigation_trm import NavigationTRM, create_navigation_model
+# Export the wrapper that uses the external TRM submodule.
+from .navigation_trm_submodule import NavigationTRM, create_navigation_model

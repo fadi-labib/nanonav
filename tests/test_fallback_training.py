@@ -67,3 +67,28 @@ def test_official_trm_backprop_flows():
         if "inner.embed_tokens" in name or "self_attn" in name
     )
     assert has_backbone_grad, "Official TRM backbone did not receive gradients"
+
+
+def test_external_trm_submodule_used_and_trains():
+    """
+    Verify we instantiate the external TRM submodule (not a local copy) and it trains.
+    """
+    model = create_model(grid_size=3, dim=8, max_recursion_steps=2, use_fallback=False)
+    model.train()
+
+    # Confirm the backbone class comes from the external submodule
+    from models.recursive_reasoning.trm import TinyRecursiveReasoningModel_ACTV1
+
+    assert isinstance(model.trm.trm, TinyRecursiveReasoningModel_ACTV1)
+
+    tokens = torch.randint(0, 10, (2, 3 * 3 + 4))
+    targets = torch.tensor([0, 1])
+    loss = torch.nn.CrossEntropyLoss()(model(tokens), targets)
+    loss.backward()
+
+    # Any parameter in the external TRM should get gradients
+    has_trm_grad = any(
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in model.trm.trm.parameters()
+    )
+    assert has_trm_grad, "External TRM submodule parameters did not receive gradients"

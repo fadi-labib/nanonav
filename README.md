@@ -111,9 +111,8 @@ trm_nav/
 │   ├── train.py               # Training loop with GPU support and regularization
 │   ├── evaluate.py            # Benchmarking and rollouts
 │   ├── visualize.py           # ASCII and matplotlib visualization
-│   └── official_trm/          # Official Samsung SAIL Montreal TRM integration
-│       ├── navigation_trm_submodule.py  # Navigation wrapper for official TRM
-│       └── ...                # TRM implementation files
+│   └── official_trm/          # Thin wrapper around the external TRM submodule
+│       └── navigation_trm_submodule.py  # Navigation wrapper for official TRM
 ├── external/                  # Git submodules
 │   └── trm/                   # Official Samsung TRM repository (submodule)
 ├── scripts/
