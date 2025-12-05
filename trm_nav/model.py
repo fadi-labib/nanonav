@@ -31,6 +31,7 @@ class TRMNavigator(nn.Module):
         max_recursion_steps: int = 30,
         halt_prob_thres: float = 0.5,
         dropout: float = 0.1,
+        use_fallback: bool = False,
     ):
         super().__init__()
 
@@ -48,7 +49,8 @@ class TRMNavigator(nn.Module):
             hidden_size=dim,
             num_heads=max(1, dim // 16),
             max_recursion_steps=max_recursion_steps,
-            dropout=dropout
+            dropout=dropout,
+            use_fallback=use_fallback
         )
 
     def forward(
@@ -101,6 +103,7 @@ def create_model(
     grid_size: int = 8,
     dim: int = 64,
     depth: int = 2,
+    use_fallback: bool = False,
     **kwargs
 ) -> TRMNavigator:
     """
@@ -120,5 +123,6 @@ def create_model(
         dim=dim,
         seq_len=seq_len,
         depth=depth,  # Kept for compatibility
+        use_fallback=use_fallback,
         **kwargs
     )

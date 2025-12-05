@@ -38,50 +38,41 @@ class NavigationTRM(nn.Module):
         num_heads: int = 4,
         max_recursion_steps: int = 8,
         dropout: float = 0.1,
+        use_fallback: bool = False,
         num_actions: int = 4,
         **kwargs
     ):
         super().__init__()
         self.num_actions = num_actions
+        self.use_fallback = use_fallback
 
-        if not _TRM_AVAILABLE:
+        if use_fallback:
+            # Always allow fallback regardless of TRM availability
+            self._init_fallback(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions)
+        elif not _TRM_AVAILABLE:
             raise ImportError(f"Official TRM not available: {_IMPORT_ERROR}. Please ensure the submodule is properly initialized.")
         else:
             self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions)
     
     def _init_fallback(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions):
-        """Fallback implementation using simple transformer."""
+        """Fallback implementation using a simple MLP classifier (fast and debuggable)."""
         self.use_official = False
         self.seq_len = seq_len
         self.hidden_size = hidden_size
         self.max_recursion_steps = max_recursion_steps
 
-        # Simple transformer-based implementation
+        # Simple embedding + MLP (works as a sanity baseline)
         self.token_embed = nn.Embedding(vocab_size, hidden_size)
-        self.pos_embed = nn.Embedding(seq_len, hidden_size)
 
-        # Multi-head attention layers
-        self.attention_layers = nn.ModuleList([
-            nn.MultiheadAttention(
-                embed_dim=hidden_size,
-                num_heads=num_heads,
-                dropout=dropout,
-                batch_first=True
-            ) for _ in range(2)
-        ])
-
-        self.layer_norms = nn.ModuleList([
-            nn.LayerNorm(hidden_size) for _ in range(2)
-        ])
-
-        self.ffns = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_size, int(hidden_size * 2.0)),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(int(hidden_size * 2.0), hidden_size)
-            ) for _ in range(2)
-        ])
+        mlp_hidden = max(hidden_size * 2, 128)
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(hidden_size * seq_len),
+            nn.Linear(hidden_size * seq_len, mlp_hidden),
+            nn.GELU(),
+            nn.Linear(mlp_hidden, mlp_hidden),
+            nn.GELU(),
+            nn.Linear(mlp_hidden, num_actions)
+        )
 
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_size),
@@ -119,7 +110,9 @@ class NavigationTRM(nn.Module):
             "dropout": dropout,
             "halt_max_steps": max_recursion_steps,
             "halt_exploration_prob": 0.0,
-            "puzzle_emb_len": 0  # Explicitly set to 0 since we don't use puzzle embeddings
+            "puzzle_emb_len": 0,  # Explicitly set to 0 since we don't use puzzle embeddings
+            # Use full precision for stability (bfloat16 can stall learning on some GPUs/CPUs)
+            "forward_dtype": "float32",
         }
 
         # Initialize the official TRM
@@ -127,7 +120,7 @@ class NavigationTRM(nn.Module):
         self.config = self.trm.config
         self.vocab_size = vocab_size
 
-        # Classification head (hidden states are already in hidden_size dimension)
+        # Classification head consumes hidden representations (z_H)
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden_size),
             nn.Dropout(dropout),
@@ -151,70 +144,62 @@ class NavigationTRM(nn.Module):
                 nn.init.ones_(module.weight)
     
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Forward pass using official TRM."""
-        return self._forward_official(tokens)
-    
+        """Forward pass using official TRM with full z_H/z_L mechanism."""
+        if getattr(self, "use_official", True):
+            return self._forward_official(tokens)
+        return self._forward_fallback(tokens)
+
     def _forward_official(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Forward with official TRM."""
+        """Forward using official TRM forward, pooling gradient-carrying hidden states."""
         batch_size = tokens.shape[0]
         device = tokens.device
-        
+
         # Update config batch size
         self.config.batch_size = batch_size
-        
-        # Create puzzle identifiers
-        puzzle_ids = torch.zeros(batch_size, dtype=torch.long, device=device)
-        
-        # Create batch dict for TRM
+
+        # Build batch and carry
         batch = {
             "inputs": tokens,
-            "puzzle_identifiers": puzzle_ids
+            "puzzle_identifiers": torch.zeros(batch_size, dtype=torch.long, device=device)
         }
-        
-        # Initialize carry state using official TRM approach
-        with torch.device(device):
-            carry = self.trm.initial_carry(batch)
-        
-        # Run forward pass
-        carry_after, output = self.trm.forward(carry, batch)
+        carry = self.trm.initial_carry(batch)
+        carry = self._carry_to_device(carry, device)
 
-        # Extract HIDDEN STATES (not logits!) from the TRM
-        # z_H = high-level reasoning state, shape (batch, seq_len, hidden_size)
-        # This is the actual learned representation, NOT next-token predictions
-        hidden = carry_after.inner_carry.z_H  # (batch, seq_len, hidden_size)
+        # Run official forward (inner forward already runs all cycles with grad)
+        carry_after, outputs = self.trm.forward(carry, batch)
 
-        # Use LAST 4 tokens (coordinates: start_row, start_col, goal_row, goal_col)
-        # These have "seen" the entire grid via attention and contain
-        # the most relevant information for deciding the action
-        coord_hidden = hidden[:, -4:, :].float()  # (batch, 4, hidden_size)
-        pooled = coord_hidden.mean(dim=1)  # (batch, hidden_size)
+        # Prefer gradient-carrying hidden states
+        z_H = outputs.get("last_hidden", carry_after.inner_carry.z_H).float()
 
-        # Classify
-        logits = self.classifier(pooled)
-        return logits
+        # Pool over all tokens
+        pooled_features = z_H.mean(dim=1)
+
+        # Project to action space
+        return self.classifier(pooled_features)
+
+    @staticmethod
+    def _carry_to_device(carry, device: torch.device):
+        """Move the TRM carry tensors to the specified device."""
+        inner = carry.inner_carry
+        inner = type(inner)(
+            z_H=inner.z_H.to(device),
+            z_L=inner.z_L.to(device)
+        )
+
+        current_data = {k: v.to(device) for k, v in carry.current_data.items()}
+
+        return type(carry)(
+            inner_carry=inner,
+            steps=carry.steps.to(device),
+            halted=carry.halted.to(device),
+            current_data=current_data
+        )
     
     def _forward_fallback(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Forward with fallback transformer."""
-        batch_size, seq_len = tokens.shape
-        device = tokens.device
-        
-        # Embed tokens and positions
-        x = self.token_embed(tokens)
-        positions = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
-        x = x + self.pos_embed(positions)
-        
-        # Recursive reasoning
-        for cycle in range(self.max_recursion_steps):
-            for attn, ln, ffn in zip(self.attention_layers, self.layer_norms, self.ffns):
-                attn_out, _ = attn(x, x, x)
-                x = ln(x + attn_out)
-                ffn_out = ffn(x)
-                x = ln(x + ffn_out)
-        
-        # Pool and classify
-        pooled = x.mean(dim=1)
-        logits = self.classifier(pooled)
-        return logits
+        """Forward with simple MLP baseline (no attention)."""
+        emb = self.token_embed(tokens)  # (B, seq_len, hidden)
+        flat = emb.flatten(start_dim=1)  # (B, seq_len*hidden)
+        return self.mlp(flat)
     
     def predict_action(self, tokens: torch.Tensor) -> torch.Tensor:
         """Predict action (argmax of logits)."""

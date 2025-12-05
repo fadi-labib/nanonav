@@ -269,12 +269,10 @@ def build_dataset(
     all_tokens = []
     all_actions = []
 
-    # If augmenting, we need fewer base samples
-    target = num_samples // 8 if augment else num_samples
-
     map_idx = 0
 
-    while len(all_actions) < target:
+    # Keep generating until we have the requested number of samples
+    while len(all_actions) < num_samples:
         try:
             # Generate solvable map
             grid, start, goal = generate_solvable_map(

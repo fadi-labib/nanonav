@@ -239,6 +239,7 @@ def train(
     device: Optional[str] = None,
     save_every: int = 10,
     resume: bool = True,
+    use_fallback: bool = False,
 ) -> Dict[str, list]:
     """
     Train the TRM navigator model.
@@ -301,7 +302,14 @@ def train(
 
     # Create model
     try:
-        model = create_model(grid_size=grid_size, dim=dim, depth=depth, dropout=dropout, max_recursion_steps=max_recursion_steps)
+        model = create_model(
+            grid_size=grid_size,
+            dim=dim,
+            depth=depth,
+            dropout=dropout,
+            max_recursion_steps=max_recursion_steps,
+            use_fallback=use_fallback
+        )
     except Exception as model_error:
         print(f"{Colors.RED}✗{Colors.RESET} Model creation failed: {model_error}")
         import traceback
@@ -536,6 +544,8 @@ def main():
     parser.add_argument("--device", default=None)
     parser.add_argument("--no-resume", action="store_true",
                         help="Don't resume from existing checkpoint")
+    parser.add_argument("--use-fallback", action="store_true",
+                        help="Use simple transformer fallback instead of official TRM (for debugging)")
 
     args = parser.parse_args()
 
@@ -554,7 +564,8 @@ def main():
         resume=not args.no_resume,
         epochs=args.epochs,
         patience=args.patience,
-        device=args.device
+        device=args.device,
+        use_fallback=args.use_fallback
     )
 
 
