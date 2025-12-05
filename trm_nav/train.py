@@ -263,6 +263,24 @@ def train(
     Returns:
         Dictionary of training history
     """
+    # Keep a single source of truth for run configuration (persisted in checkpoints)
+    current_config = {
+        'train_path': train_path,
+        'val_path': val_path,
+        'grid_size': grid_size,
+        'dim': dim,
+        'depth': depth,
+        'dropout': dropout,
+        'max_recursion_steps': max_recursion_steps,
+        'use_fallback': use_fallback,
+        'batch_size': batch_size,
+        'lr': lr,
+        'weight_decay': weight_decay,
+        'patience': patience,
+        'epochs': epochs,
+        'save_every': save_every,
+    }
+
     # Setup device
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -370,6 +388,25 @@ def train(
     if resume and latest_checkpoint.exists():
         print(f"Found existing checkpoint: {latest_checkpoint}")
         checkpoint = torch.load(latest_checkpoint, map_location=device)
+        saved_config = checkpoint.get('config')
+        if saved_config is None:
+            raise ValueError("Checkpoint missing config; delete it or rerun with --no-resume.")
+
+        # Enforce exact config match before resuming to avoid silent mismatches
+        mismatches = []
+        for key, expected_value in current_config.items():
+            saved_value = saved_config.get(key)
+            if saved_value != expected_value:
+                mismatches.append((key, saved_value, expected_value))
+        if mismatches:
+            mismatch_lines = "\n".join(
+                f"  {k}: checkpoint={sv!r} vs current={cv!r}" for k, sv, cv in mismatches
+            )
+            raise ValueError(
+                f"Config mismatch between checkpoint and current run:\n{mismatch_lines}\n"
+                "Aborting resume. Re-run with matching flags or delete the checkpoint."
+            )
+
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -424,12 +461,7 @@ def train(
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_acc': val_acc,
                     'val_loss': val_loss,
-                    'config': {
-                        'grid_size': grid_size,
-                        'dim': dim,
-                        'depth': depth,
-                        'dropout': dropout
-                    }
+                    'config': current_config
                 }, checkpoint_dir / "best.pt")
 
             # Check early stopping
@@ -453,13 +485,7 @@ def train(
             'history': history,
             'early_stop_counter': early_stopping.counter,
             'early_stop_best_loss': early_stopping.best_loss,
-            'config': {
-                'grid_size': grid_size,
-                'dim': dim,
-                'depth': depth,
-                'dropout': dropout,
-                'max_recursion_steps': max_recursion_steps
-            }
+            'config': current_config
         }
         torch.save(checkpoint_data, checkpoint_dir / "latest_checkpoint.pt")
 
@@ -484,29 +510,19 @@ def train(
                 torch.cuda.empty_cache()
 
         # Periodic checkpoint
-        if (epoch + 1) % save_every == 0:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'config': {
-                    'grid_size': grid_size,
-                    'dim': dim,
-                    'depth': depth,
-                    'dropout': dropout
-                }
-            }, checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt")
+            if (epoch + 1) % save_every == 0:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'config': current_config
+                }, checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt")
 
     # Save final model
     torch.save({
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'config': {
-            'grid_size': grid_size,
-            'dim': dim,
-            'depth': depth,
-            'dropout': dropout
-        }
+        'config': current_config
     }, checkpoint_dir / "final.pt")
 
     # Save training history

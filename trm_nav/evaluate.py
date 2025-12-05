@@ -252,7 +252,12 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate TRM Navigator")
     parser.add_argument("--checkpoint", default="checkpoints/best.pt")
     parser.add_argument("--num-episodes", type=int, default=100)
-    parser.add_argument("--grid-size", type=int, default=8)
+    parser.add_argument("--grid-size", type=int, default=None,
+                        help="Grid size override (must match checkpoint if provided)")
+    parser.add_argument("--max-recursion", type=int, default=None,
+                        help="Max recursion override (must match checkpoint if provided)")
+    parser.add_argument("--use-fallback", action="store_true",
+                        help="Force fallback model (must match checkpoint)")
     parser.add_argument("--output", default="results/benchmark.json")
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=12345)
@@ -269,12 +274,38 @@ def main():
 
     # Load model
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    config = checkpoint.get('config', {})
+    config = checkpoint.get('config')
+    if config is None:
+        raise ValueError("Checkpoint is missing config. Please retrain with the updated training script.")
 
+    required_keys = ['grid_size', 'dim', 'depth', 'dropout', 'max_recursion_steps', 'use_fallback']
+    missing = [k for k in required_keys if k not in config]
+    if missing:
+        raise ValueError(f"Checkpoint config is missing keys: {missing}. Retrain or use a compatible checkpoint.")
+
+    # Enforce config compatibility with any provided CLI overrides
+    mismatch_messages = []
+    if args.grid_size is not None and args.grid_size != config['grid_size']:
+        mismatch_messages.append(f"grid_size: checkpoint={config['grid_size']} vs arg={args.grid_size}")
+    if args.max_recursion is not None and args.max_recursion != config['max_recursion_steps']:
+        mismatch_messages.append(f"max_recursion_steps: checkpoint={config['max_recursion_steps']} vs arg={args.max_recursion}")
+    if args.use_fallback != config['use_fallback']:
+        mismatch_messages.append(f"use_fallback: checkpoint={config['use_fallback']} vs arg={args.use_fallback}")
+    if mismatch_messages:
+        details = "\n  ".join(mismatch_messages)
+        raise ValueError(
+            f"Checkpoint/config mismatch detected:\n  {details}\n"
+            "Aborting evaluation. Run with matching flags or use the correct checkpoint."
+        )
+
+    # Always use the checkpoint's forward-pass config to avoid silent mismatches
     model = create_model(
-        grid_size=config.get('grid_size', args.grid_size),
-        dim=config.get('dim', 64),
-        depth=config.get('depth', 2)
+        grid_size=config['grid_size'],
+        dim=config['dim'],
+        depth=config['depth'],
+        dropout=config['dropout'],
+        max_recursion_steps=config['max_recursion_steps'],
+        use_fallback=config['use_fallback']
     )
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
@@ -283,7 +314,7 @@ def main():
     results = benchmark(
         model,
         num_episodes=args.num_episodes,
-        grid_size=args.grid_size,
+        grid_size=config['grid_size'],
         base_seed=args.seed,
         device=device
     )
