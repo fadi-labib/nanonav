@@ -5,7 +5,8 @@ Uses the TRM from the git submodule at external/trm.
 
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List, Any
+from dataclasses import dataclass, field
 import sys
 import os
 import warnings
@@ -27,6 +28,41 @@ except ImportError as e:
     _IMPORT_ERROR = str(e)
 
 
+@dataclass
+class RecursionDebugInfo:
+    """Debug information captured during TRM recursion."""
+    # Per-step statistics
+    step_z_H_norms: List[float] = field(default_factory=list)
+    step_z_L_norms: List[float] = field(default_factory=list)
+    step_z_H_means: List[float] = field(default_factory=list)
+    step_z_L_means: List[float] = field(default_factory=list)
+    step_z_H_stds: List[float] = field(default_factory=list)
+    step_z_L_stds: List[float] = field(default_factory=list)
+    step_changes: List[float] = field(default_factory=list)  # How much z_H changes per step
+
+    # Final output statistics
+    final_z_H_norm: float = 0.0
+    final_z_H_mean: float = 0.0
+    final_z_H_std: float = 0.0
+    pooled_features_norm: float = 0.0
+    pooled_features_mean: float = 0.0
+    pooled_features_std: float = 0.0
+
+    # Classifier input/output
+    classifier_input_norm: float = 0.0
+    logits_mean: float = 0.0
+    logits_std: float = 0.0
+    logits_range: float = 0.0  # max - min (indicates confidence)
+
+    # Embedding statistics
+    embedding_norm: float = 0.0
+    embedding_mean: float = 0.0
+
+    # Gradient info (populated after backward)
+    embedding_grad_norm: Optional[float] = None
+    classifier_grad_norm: Optional[float] = None
+
+
 class NavigationTRM(nn.Module):
     """Navigation wrapper for the official TRM implementation."""
 
@@ -45,6 +81,8 @@ class NavigationTRM(nn.Module):
         super().__init__()
         self.num_actions = num_actions
         self.use_fallback = use_fallback
+        self._debug_mode = False
+        self._last_debug_info: Optional[RecursionDebugInfo] = None
 
         if use_fallback:
             # Always allow fallback regardless of TRM availability
@@ -200,7 +238,186 @@ class NavigationTRM(nn.Module):
         emb = self.token_embed(tokens)  # (B, seq_len, hidden)
         flat = emb.flatten(start_dim=1)  # (B, seq_len*hidden)
         return self.mlp(flat)
-    
+
+    def set_debug_mode(self, enabled: bool):
+        """Enable or disable debug mode for detailed internal tracking."""
+        self._debug_mode = enabled
+
+    def get_last_debug_info(self) -> Optional[RecursionDebugInfo]:
+        """Get debug info from the last forward pass (only when debug mode enabled)."""
+        return self._last_debug_info
+
+    def forward_with_debug(self, tokens: torch.Tensor) -> Tuple[torch.Tensor, RecursionDebugInfo]:
+        """
+        Forward pass with detailed debug information about recursion internals.
+
+        This runs a custom forward that captures z_H and z_L at each recursion step
+        to help diagnose where the model might be failing.
+        """
+        if not getattr(self, "use_official", True):
+            # Fallback mode - simpler debug
+            debug_info = RecursionDebugInfo()
+            emb = self.token_embed(tokens)
+            debug_info.embedding_norm = emb.norm().item()
+            debug_info.embedding_mean = emb.mean().item()
+            flat = emb.flatten(start_dim=1)
+            logits = self.mlp(flat)
+            debug_info.logits_mean = logits.mean().item()
+            debug_info.logits_std = logits.std().item()
+            debug_info.logits_range = (logits.max() - logits.min()).item()
+            self._last_debug_info = debug_info
+            return logits, debug_info
+
+        # Official TRM debug forward
+        debug_info = RecursionDebugInfo()
+        batch_size = tokens.shape[0]
+        device = tokens.device
+
+        # Update config batch size
+        self.config.batch_size = batch_size
+
+        # Access TRM inner model
+        inner = self.trm.inner
+
+        # Get input embeddings
+        batch = {
+            "inputs": tokens,
+            "puzzle_identifiers": torch.zeros(batch_size, dtype=torch.long, device=device)
+        }
+        input_embeddings = inner._input_embeddings(batch["inputs"], batch["puzzle_identifiers"])
+        debug_info.embedding_norm = input_embeddings.norm().item()
+        debug_info.embedding_mean = input_embeddings.mean().item()
+
+        # Initialize carry
+        seq_info = dict(
+            cos_sin=inner.rotary_emb() if hasattr(inner, "rotary_emb") else None,
+        )
+
+        # Initialize z_H and z_L
+        z_H = inner.H_init.unsqueeze(0).unsqueeze(0).expand(batch_size, self.config.seq_len, -1).clone()
+        z_L = inner.L_init.unsqueeze(0).unsqueeze(0).expand(batch_size, self.config.seq_len, -1).clone()
+
+        # Move to device
+        z_H = z_H.to(device)
+        z_L = z_L.to(device)
+
+        # Record initial state
+        debug_info.step_z_H_norms.append(z_H.norm().item())
+        debug_info.step_z_L_norms.append(z_L.norm().item())
+        debug_info.step_z_H_means.append(z_H.mean().item())
+        debug_info.step_z_L_means.append(z_L.mean().item())
+        debug_info.step_z_H_stds.append(z_H.std().item())
+        debug_info.step_z_L_stds.append(z_L.std().item())
+
+        # Run recursion steps manually to capture internals
+        for h_step in range(self.config.H_cycles):
+            z_H_before = z_H.clone()
+
+            # L cycles
+            for l_step in range(self.config.L_cycles):
+                z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
+
+            # H update
+            z_H = inner.L_level(z_H, z_L, **seq_info)
+
+            # Record changes
+            change = (z_H - z_H_before).norm().item()
+            debug_info.step_changes.append(change)
+            debug_info.step_z_H_norms.append(z_H.norm().item())
+            debug_info.step_z_L_norms.append(z_L.norm().item())
+            debug_info.step_z_H_means.append(z_H.mean().item())
+            debug_info.step_z_L_means.append(z_L.mean().item())
+            debug_info.step_z_H_stds.append(z_H.std().item())
+            debug_info.step_z_L_stds.append(z_L.std().item())
+
+        # Final statistics
+        debug_info.final_z_H_norm = z_H.norm().item()
+        debug_info.final_z_H_mean = z_H.mean().item()
+        debug_info.final_z_H_std = z_H.std().item()
+
+        # Pool and classify
+        pooled_features = z_H.float().mean(dim=1)
+        debug_info.pooled_features_norm = pooled_features.norm().item()
+        debug_info.pooled_features_mean = pooled_features.mean().item()
+        debug_info.pooled_features_std = pooled_features.std().item()
+        debug_info.classifier_input_norm = pooled_features.norm().item()
+
+        logits = self.classifier(pooled_features)
+        debug_info.logits_mean = logits.mean().item()
+        debug_info.logits_std = logits.std().item()
+        debug_info.logits_range = (logits.max() - logits.min()).item()
+
+        self._last_debug_info = debug_info
+        return logits, debug_info
+
+    def print_debug_summary(self, debug_info: Optional[RecursionDebugInfo] = None):
+        """Print a formatted summary of debug information."""
+        info = debug_info or self._last_debug_info
+        if info is None:
+            print("No debug info available. Run forward_with_debug() first.")
+            return
+
+        print("\n" + "="*70)
+        print("TRM RECURSION DEBUG SUMMARY")
+        print("="*70)
+
+        # Embedding stats
+        print(f"\n[INPUT EMBEDDING]")
+        print(f"  Norm: {info.embedding_norm:.4f}")
+        print(f"  Mean: {info.embedding_mean:.6f}")
+
+        # Recursion analysis
+        print(f"\n[RECURSION ANALYSIS] ({len(info.step_changes)} H-cycles)")
+        if info.step_changes:
+            print(f"  z_H changes per step: {[f'{c:.4f}' for c in info.step_changes[:5]]}{'...' if len(info.step_changes) > 5 else ''}")
+            total_change = sum(info.step_changes)
+            avg_change = total_change / len(info.step_changes)
+            print(f"  Total change: {total_change:.4f}, Avg per step: {avg_change:.4f}")
+
+            if avg_change < 0.001:
+                print("  ⚠️  WARNING: z_H barely changing - recursion may be ineffective!")
+            elif info.step_changes[-1] < 0.0001:
+                print("  ⚠️  WARNING: z_H converged to fixed point - no more refinement")
+
+        # z_H evolution
+        print(f"\n[z_H EVOLUTION]")
+        print(f"  Initial norm: {info.step_z_H_norms[0]:.4f}")
+        print(f"  Final norm:   {info.step_z_H_norms[-1]:.4f}")
+        print(f"  Initial std:  {info.step_z_H_stds[0]:.4f}")
+        print(f"  Final std:    {info.step_z_H_stds[-1]:.4f}")
+
+        if info.step_z_H_stds[-1] < 0.01:
+            print("  ⚠️  WARNING: z_H has collapsed (very low variance)!")
+
+        # Pooled features
+        print(f"\n[POOLED FEATURES -> CLASSIFIER]")
+        print(f"  Norm: {info.pooled_features_norm:.4f}")
+        print(f"  Mean: {info.pooled_features_mean:.6f}")
+        print(f"  Std:  {info.pooled_features_std:.4f}")
+
+        # Output analysis
+        print(f"\n[OUTPUT LOGITS]")
+        print(f"  Mean:  {info.logits_mean:.4f}")
+        print(f"  Std:   {info.logits_std:.4f}")
+        print(f"  Range: {info.logits_range:.4f}")
+
+        if info.logits_range < 0.1:
+            print("  ⚠️  WARNING: Logits have very small range - near-uniform predictions!")
+        elif info.logits_std < 0.1:
+            print("  ⚠️  WARNING: Low logit variance - model may be underconfident")
+
+        # Gradient info if available
+        if info.embedding_grad_norm is not None or info.classifier_grad_norm is not None:
+            print(f"\n[GRADIENTS]")
+            if info.embedding_grad_norm is not None:
+                print(f"  Embedding grad norm: {info.embedding_grad_norm:.6f}")
+                if info.embedding_grad_norm < 1e-7:
+                    print("  ⚠️  WARNING: Near-zero embedding gradient!")
+            if info.classifier_grad_norm is not None:
+                print(f"  Classifier grad norm: {info.classifier_grad_norm:.6f}")
+
+        print("\n" + "="*70)
+
     def predict_action(self, tokens: torch.Tensor) -> torch.Tensor:
         """Predict action (argmax of logits)."""
         logits = self.forward(tokens)

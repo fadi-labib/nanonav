@@ -23,6 +23,7 @@ if hasattr(torch, '_dynamo'):
 
 from .dataset import NavigationDataset
 from .model import create_model
+from .debug import TRMDebugger, create_debugger
 
 
 # ANSI color codes for terminal output
@@ -95,7 +96,8 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
-    pbar: Optional[tqdm] = None
+    pbar: Optional[tqdm] = None,
+    debugger: Optional[TRMDebugger] = None
 ) -> Dict[str, float]:
     """Train for one epoch with error handling."""
     model.train()
@@ -111,10 +113,23 @@ def train_epoch(
                 tokens = tokens.to(device, non_blocking=True)
                 actions = actions.to(device, non_blocking=True)
 
+                # Debug: track forward pass
+                if debugger:
+                    debugger.on_forward_start(tokens)
+
                 optimizer.zero_grad()
                 logits = model(tokens)
                 loss = criterion(logits, actions)
+
+                # Debug: track output
+                if debugger:
+                    debugger.on_forward_end(logits, actions)
+
                 loss.backward()
+
+                # Debug: track gradients after backward
+                if debugger:
+                    debugger.on_backward_end()
 
                 # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -240,6 +255,7 @@ def train(
     save_every: int = 10,
     resume: bool = True,
     use_fallback: bool = False,
+    debug: bool = False,
 ) -> Dict[str, list]:
     """
     Train the TRM navigator model.
@@ -280,6 +296,12 @@ def train(
         'epochs': epochs,
         'save_every': save_every,
     }
+
+    # Debug mode setup
+    debugger = None
+    if debug:
+        print(f"{Colors.YELLOW}🔍 DEBUG MODE ENABLED{Colors.RESET}")
+        print(f"   Debug output will be saved to: {Colors.CYAN}debug_output/{Colors.RESET}")
 
     # Setup device
     if device is None:
@@ -360,6 +382,29 @@ def train(
     print(f"{Colors.GREEN}✓{Colors.RESET} Config: lr={lr}, batch={batch_size}, dropout={dropout}, "
           f"wd={weight_decay}, patience={patience}")
 
+    # Initialize debugger after model is on device
+    if debug:
+        debugger = create_debugger(model, enabled=True, output_dir="debug_output")
+        print(f"{Colors.GREEN}✓{Colors.RESET} Debugger initialized with gradient tracking")
+
+        # Run initial debug forward pass to check model internals
+        print(f"\n{Colors.YELLOW}Running initial debug analysis...{Colors.RESET}")
+        try:
+            # Get a sample batch for debug analysis
+            sample_tokens, sample_actions = next(iter(train_loader))
+            sample_tokens = sample_tokens[:4].to(device)  # Use small batch
+
+            # Check if model has debug forward
+            inner_model = model.trm if hasattr(model, 'trm') else model
+            if hasattr(inner_model, 'forward_with_debug'):
+                with torch.no_grad():
+                    _, debug_info = inner_model.forward_with_debug(sample_tokens)
+                inner_model.print_debug_summary(debug_info)
+            else:
+                print("  (Debug forward not available for this model type)")
+        except Exception as e:
+            print(f"  {Colors.YELLOW}Initial debug analysis skipped: {e}{Colors.RESET}")
+
     # Setup training with weight decay (AdamW)
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
@@ -436,7 +481,7 @@ def train(
         epoch_pbar.set_description(f"Epoch {epoch+1:3d}/{epochs}")
 
         # Train
-        train_metrics = train_epoch(model, train_loader, optimizer, criterion, device, pbar=epoch_pbar)
+        train_metrics = train_epoch(model, train_loader, optimizer, criterion, device, pbar=epoch_pbar, debugger=debugger)
         history['train_loss'].append(train_metrics['loss'])
         history['train_acc'].append(train_metrics['accuracy'])
 
@@ -503,6 +548,15 @@ def train(
             + best_marker + patience_info
         )
 
+        # Debug: end of epoch analysis
+        if debugger:
+            val_metrics_for_debug = {'loss': val_loss, 'accuracy': val_acc} if val_loader else None
+            debugger.on_epoch_end(epoch, train_metrics, val_metrics_for_debug)
+
+            # Generate plots every 5 epochs in debug mode
+            if (epoch + 1) % 5 == 0:
+                debugger.generate_plots()
+
         # Periodic cleanup to prevent memory fragmentation
         if (epoch + 1) % 5 == 0:
             gc.collect()
@@ -529,9 +583,19 @@ def train(
     with open(checkpoint_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
 
+    # Final debug output
+    if debugger:
+        print(f"\n{Colors.YELLOW}Generating final debug report...{Colors.RESET}")
+        debugger.generate_plots(save_path="debug_output/final_debug_plots.png")
+        debugger.save_stats("final_debug_stats.json")
+        debugger.print_quick_diagnosis()
+        debugger.cleanup()
+
     print(f"\n{Colors.BOLD}{Colors.GREEN}Training complete!{Colors.RESET}")
     print(f"Best validation: loss={Colors.GREEN}{best_val_loss:.4f}{Colors.RESET} acc={Colors.GREEN}{best_val_acc:.4f}{Colors.RESET}")
     print(f"Checkpoints saved to: {Colors.CYAN}{checkpoint_dir}{Colors.RESET}")
+    if debug:
+        print(f"Debug output saved to: {Colors.CYAN}debug_output/{Colors.RESET}")
     return history
 
 
@@ -562,6 +626,8 @@ def main():
                         help="Don't resume from existing checkpoint")
     parser.add_argument("--use-fallback", action="store_true",
                         help="Use simple transformer fallback instead of official TRM (for debugging)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug mode with detailed gradient and hidden state tracking")
 
     args = parser.parse_args()
 
@@ -581,7 +647,8 @@ def main():
         epochs=args.epochs,
         patience=args.patience,
         device=args.device,
-        use_fallback=args.use_fallback
+        use_fallback=args.use_fallback,
+        debug=args.debug
     )
 
 
