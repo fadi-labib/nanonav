@@ -1,0 +1,38 @@
+From 9da3f4b1fb65e2a0502234486ae6d9c566111473 Mon Sep 17 00:00:00 2001
+From: Fadi Labib <github@fadilabib.com>
+Date: Fri, 5 Dec 2025 14:32:23 +0100
+Subject: [PATCH] Enable grad on all TRM recursion steps
+
+---
+ models/recursive_reasoning/trm.py | 15 +++++----------
+ 1 file changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/models/recursive_reasoning/trm.py b/models/recursive_reasoning/trm.py
+index 65bfbe3..18d5d22 100644
+--- a/models/recursive_reasoning/trm.py
++++ b/models/recursive_reasoning/trm.py
+@@ -204,16 +204,11 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
+         # Forward iterations
+         it = 0
+         z_H, z_L = carry.z_H, carry.z_L
+-        # H_cycles-1 without grad
+-        with torch.no_grad():
+-            for _H_step in range(self.config.H_cycles-1):
+-                for _L_step in range(self.config.L_cycles):
+-                    z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+-                z_H = self.L_level(z_H, z_L, **seq_info)
+-        # 1 with grad
+-        for _L_step in range(self.config.L_cycles):
+-            z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+-        z_H = self.L_level(z_H, z_L, **seq_info)
++        # Run all H_cycles with gradients so refinement steps are learnable
++        for _H_step in range(self.config.H_cycles):
++            for _L_step in range(self.config.L_cycles):
++                z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
++            z_H = self.L_level(z_H, z_L, **seq_info)
+ 
+         # LM Outputs
+         new_carry = TinyRecursiveReasoningModel_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach())  # New carry no grad
+-- 
+2.43.0
+
