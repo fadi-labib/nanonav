@@ -29,6 +29,7 @@ class TRMNavigator(nn.Module):
         depth: int = 2,
         num_actions: int = 4,
         max_recursion_steps: int = 30,
+        l_cycles: int = 1,  # Inner loop iterations (original TRM uses 4-6)
         halt_prob_thres: float = 0.5,
         dropout: float = 0.1,
         use_fallback: bool = False,
@@ -41,6 +42,7 @@ class TRMNavigator(nn.Module):
         self.seq_len = seq_len
         self.num_actions = num_actions
         self.max_recursion_steps = max_recursion_steps
+        self.l_cycles = l_cycles
         self.halt_prob_thres = halt_prob_thres
         self.dropout_rate = dropout
         self.mode = mode
@@ -52,6 +54,7 @@ class TRMNavigator(nn.Module):
             hidden_size=dim,
             num_heads=max(1, dim // 16),
             max_recursion_steps=max_recursion_steps,
+            l_cycles=l_cycles,
             dropout=dropout,
             use_fallback=use_fallback,
             mode=mode,

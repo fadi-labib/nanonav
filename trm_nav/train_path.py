@@ -141,6 +141,7 @@ def train(
     depth: int = 2,
     dropout: float = 0.1,
     max_recursion_steps: int = 8,
+    l_cycles: int = 1,  # Inner loop iterations (original TRM uses 4-6)
     batch_size: int = 512,  # Increased for better GPU utilization
     lr: float = 1e-3,
     weight_decay: float = 0.01,
@@ -198,6 +199,7 @@ def train(
         depth=depth,
         dropout=dropout,
         max_recursion_steps=max_recursion_steps,
+        l_cycles=l_cycles,
         mode="path_prediction",
         grad_last_only=grad_last_only,
     ).to(device)
@@ -211,7 +213,7 @@ def train(
 
     num_params = sum(p.numel() for p in model.parameters())
     print(f"✓ Model: {num_params:,} params (path prediction mode)")
-    print(f"✓ Config: lr={lr}, batch={batch_size}, max_recursion={max_recursion_steps}")
+    print(f"✓ Config: lr={lr}, batch={batch_size}, H_cycles={max_recursion_steps}, L_cycles={l_cycles}")
     print(f"✓ AMP: {'enabled' if use_amp and use_cuda else 'disabled'}, workers={num_workers}, compile={compiled}")
     print(f"✓ Grad: {'last step only' if grad_last_only else 'all steps'}")
 
@@ -292,7 +294,10 @@ if __name__ == "__main__":
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--depth", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--max-recursion", type=int, default=8)
+    parser.add_argument("--max-recursion", type=int, default=8,
+                        help="H_cycles: outer loop iterations (default: 8)")
+    parser.add_argument("--l-cycles", type=int, default=1,
+                        help="L_cycles: inner loop iterations (original TRM uses 4-6)")
     parser.add_argument("--batch-size", type=int, default=512,
                         help="Batch size (default: 512 for better GPU utilization)")
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -324,6 +329,7 @@ if __name__ == "__main__":
         depth=args.depth,
         dropout=args.dropout,
         max_recursion_steps=args.max_recursion,
+        l_cycles=args.l_cycles,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,

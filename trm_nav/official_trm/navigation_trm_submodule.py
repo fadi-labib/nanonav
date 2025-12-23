@@ -73,6 +73,7 @@ class NavigationTRM(nn.Module):
         hidden_size: int = 64,
         num_heads: int = 4,
         max_recursion_steps: int = 8,
+        l_cycles: int = 1,  # Inner loop iterations (original TRM uses 4-6)
         dropout: float = 0.1,
         use_fallback: bool = False,
         num_actions: int = 4,
@@ -88,13 +89,15 @@ class NavigationTRM(nn.Module):
         self._debug_mode = False
         self._last_debug_info: Optional[RecursionDebugInfo] = None
 
+        self.l_cycles = l_cycles
+
         if use_fallback:
             # Always allow fallback regardless of TRM availability
             self._init_fallback(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions)
         elif not _TRM_AVAILABLE:
             raise ImportError(f"Official TRM not available: {_IMPORT_ERROR}. Please ensure the submodule is properly initialized.")
         else:
-            self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions)
+            self._init_official(seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, l_cycles, dropout, num_actions)
     
     def _init_fallback(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions):
         """Fallback implementation using a simple MLP classifier (fast and debuggable)."""
@@ -127,7 +130,7 @@ class NavigationTRM(nn.Module):
 
         self._init_weights()
     
-    def _init_official(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, dropout, num_actions):
+    def _init_official(self, seq_len, vocab_size, hidden_size, num_heads, max_recursion_steps, l_cycles, dropout, num_actions):
         """Initialize with official TRM implementation."""
         self.use_official = True
         self.seq_len = seq_len
@@ -142,7 +145,7 @@ class NavigationTRM(nn.Module):
             "num_puzzle_identifiers": 1,
             "vocab_size": vocab_size,
             "H_cycles": max_recursion_steps,
-            "L_cycles": 1,
+            "L_cycles": l_cycles,
             "H_layers": 1,
             "L_layers": 2,
             "hidden_size": hidden_size,
