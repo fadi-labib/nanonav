@@ -155,10 +155,9 @@ def train(
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
 
     # 4-class prediction like original TRM: 0=pad, 1=free, 2=obstacle, 3=path
-    # Most cells predict their own input (free->free, obstacle->obstacle)
-    # Only path cells need to predict differently (free->path)
-    # This is much more balanced than binary classification!
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)
+    # Weight class 3 (path) higher since it's the minority we care about
+    class_weights = torch.tensor([0.1, 1.0, 1.0, 5.0], device=device)  # [pad, free, obstacle, path]
+    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
 
     # Checkpointing
     checkpoint_dir = Path(checkpoint_dir)
