@@ -162,10 +162,11 @@ class NavigationTRM(nn.Module):
 
         if self.mode == "path_prediction":
             # Per-token path prediction head (seq2seq like original TRM)
-            # Predicts 0=not path, 1=path for each token
+            # Predicts cell type: 0=pad, 1=free, 2=obstacle, 3=path
+            # This matches input encoding, so most cells predict their own input
             self.path_head = nn.Sequential(
                 nn.LayerNorm(hidden_size),
-                nn.Linear(hidden_size, 2)  # Binary: path or not
+                nn.Linear(hidden_size, 4)  # 4 classes like original TRM
             )
         else:
             # Classification head consumes hidden representations (z_H)

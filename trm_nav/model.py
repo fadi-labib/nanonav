@@ -110,16 +110,18 @@ class TRMNavigator(nn.Module):
             grid_size: Size of grid (for reshaping)
 
         Returns:
-            path_mask: (batch, grid_size, grid_size) binary mask
+            path_mask: (batch, grid_size, grid_size) binary mask (1 where path, 0 elsewhere)
         """
         if self.mode != "path_prediction":
             raise ValueError("predict_path only works in path_prediction mode")
 
-        logits = self.forward(tokens)  # (batch, seq_len, 2)
+        logits = self.forward(tokens)  # (batch, seq_len, 4)
         # Take only grid tokens (first grid_size^2 tokens)
-        grid_logits = logits[:, :grid_size * grid_size, :]  # (batch, 64, 2)
-        path_preds = grid_logits.argmax(dim=-1)  # (batch, 64)
-        return path_preds.view(-1, grid_size, grid_size)
+        grid_logits = logits[:, :grid_size * grid_size, :]  # (batch, 64, 4)
+        preds = grid_logits.argmax(dim=-1)  # (batch, 64)
+        # Class 3 = path, convert to binary mask
+        path_mask = (preds == 3).long()
+        return path_mask.view(-1, grid_size, grid_size)
 
     def predict_action_from_path(
         self,

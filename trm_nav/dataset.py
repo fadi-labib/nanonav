@@ -338,28 +338,40 @@ def encode_path_labels(
     """
     Encode path as per-cell labels for sequence-to-sequence prediction.
 
+    Uses same encoding as input tokens, but marks path cells specially.
+    This matches how the original TRM maze task works - most cells predict
+    their own input, only path cells get a different label.
+
+    Encoding (matches input encoding):
+        - 0: padding (unused)
+        - 1: free cell (not on path)
+        - 2: obstacle
+        - 3: path cell (free cell that IS on path)
+
+    Coordinate tokens: -100 (ignore in loss)
+
     Args:
-        grid: 2D occupancy grid
+        grid: 2D occupancy grid (0=free, 1=obstacle)
         path: List of (row, col) positions forming the path
 
     Returns:
-        1D tensor of labels:
-        - Grid cells: 0 = not path, 1 = path
-        - Coordinate tokens: -100 (ignore in loss)
+        1D tensor of labels matching input token structure
     """
     grid_size = grid.shape[0]
 
-    # Create path mask for grid cells
-    path_mask = np.zeros(grid_size * grid_size, dtype=np.int64)
+    # Start with same encoding as input: free=1, obstacle=2
+    labels = grid.flatten().astype(np.int64) + 1  # 0->1 (free), 1->2 (obstacle)
+
+    # Mark path cells as class 3 (only free cells can be path)
     for row, col in path:
         idx = row * grid_size + col
-        path_mask[idx] = 1
+        labels[idx] = 3  # path marker
 
     # Coordinate tokens get ignore label (-100)
     coord_labels = np.full(4, -100, dtype=np.int64)
 
     # Concatenate
-    labels = np.concatenate([path_mask, coord_labels])
+    labels = np.concatenate([labels, coord_labels])
 
     return torch.tensor(labels, dtype=torch.long)
 

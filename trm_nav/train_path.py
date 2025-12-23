@@ -37,8 +37,8 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         # Output: (batch, seq_len, 2)
         logits = model(tokens)
 
-        # Reshape for cross entropy: (batch * seq_len, 2) vs (batch * seq_len,)
-        loss = criterion(logits.view(-1, 2), labels.view(-1))
+        # Reshape for cross entropy: (batch * seq_len, 4) vs (batch * seq_len,)
+        loss = criterion(logits.view(-1, 4), labels.view(-1))
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -52,9 +52,9 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         correct += ((preds == labels) & mask).sum().item()
         total += mask.sum().item()
 
-        # Path recall: what % of actual path cells are correctly predicted
-        path_mask = labels == 1
-        path_correct += ((preds == 1) & path_mask).sum().item()
+        # Path recall: what % of actual path cells (class 3) are correctly predicted
+        path_mask = labels == 3
+        path_correct += ((preds == 3) & path_mask).sum().item()
         path_total += path_mask.sum().item()
 
     path_recall = path_correct / path_total if path_total > 0 else 0
@@ -81,7 +81,7 @@ def evaluate(model, dataloader, criterion, device):
             labels = labels.to(device)
 
             logits = model(tokens)
-            loss = criterion(logits.view(-1, 2), labels.view(-1))
+            loss = criterion(logits.view(-1, 4), labels.view(-1))
 
             total_loss += loss.item() * tokens.size(0)
 
@@ -90,8 +90,8 @@ def evaluate(model, dataloader, criterion, device):
             correct += ((preds == labels) & mask).sum().item()
             total += mask.sum().item()
 
-            path_mask = labels == 1
-            path_correct += ((preds == 1) & path_mask).sum().item()
+            path_mask = labels == 3
+            path_correct += ((preds == 3) & path_mask).sum().item()
             path_total += path_mask.sum().item()
 
     path_recall = path_correct / path_total if path_total > 0 else 0
@@ -154,10 +154,11 @@ def train(
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
 
-    # Class weights: path cells (~15%) are minority, weight them higher
-    # This encourages the model to actually learn paths, not just predict "not path"
-    class_weights = torch.tensor([1.0, 5.0], device=device)  # [not_path, path]
-    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
+    # 4-class prediction like original TRM: 0=pad, 1=free, 2=obstacle, 3=path
+    # Most cells predict their own input (free->free, obstacle->obstacle)
+    # Only path cells need to predict differently (free->path)
+    # This is much more balanced than binary classification!
+    criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
     # Checkpointing
     checkpoint_dir = Path(checkpoint_dir)
