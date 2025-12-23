@@ -188,29 +188,46 @@ class NavigationTRM(nn.Module):
         return self._forward_fallback(tokens)
 
     def _forward_official(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Forward using official TRM forward, pooling gradient-carrying hidden states."""
+        """Forward using official TRM, with proper gradient flow.
+
+        The official TRM detaches z_H in the carry, so we call the inner model
+        directly to capture z_H before it's detached.
+        """
         batch_size = tokens.shape[0]
         device = tokens.device
 
         # Update config batch size
         self.config.batch_size = batch_size
 
-        # Build batch and carry
+        # Access inner model directly for gradient flow
+        inner = self.trm.inner
+
+        # Build batch
         batch = {
             "inputs": tokens,
             "puzzle_identifiers": torch.zeros(batch_size, dtype=torch.long, device=device)
         }
-        carry = self.trm.initial_carry(batch)
-        carry = self._carry_to_device(carry, device)
 
-        # Run official forward (inner forward already runs all cycles with grad)
-        carry_after, outputs = self.trm.forward(carry, batch)
+        # Get input embeddings (with gradients)
+        input_embeddings = inner._input_embeddings(batch["inputs"], batch["puzzle_identifiers"])
 
-        # Prefer gradient-carrying hidden states
-        z_H = outputs.get("last_hidden", carry_after.inner_carry.z_H).float()
+        # Setup rotary embeddings
+        seq_info = dict(
+            cos_sin=inner.rotary_emb() if hasattr(inner, "rotary_emb") else None,
+        )
+
+        # Initialize z_H from embeddings for gradient flow, z_L from zeros
+        z_H = input_embeddings
+        z_L = torch.zeros_like(input_embeddings)
+
+        # Run ALL recursion steps WITH gradients
+        for _H_step in range(self.config.H_cycles):
+            for _L_step in range(self.config.L_cycles):
+                z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
+            z_H = inner.L_level(z_H, z_L, **seq_info)
 
         # Pool over all tokens
-        pooled_features = z_H.mean(dim=1)
+        pooled_features = z_H.float().mean(dim=1)
 
         # Project to action space
         return self.classifier(pooled_features)
