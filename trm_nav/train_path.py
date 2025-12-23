@@ -24,6 +24,9 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
     total_loss = 0
     correct = 0
     total = 0
+    # Track path-specific metrics
+    path_correct = 0  # True positives
+    path_total = 0    # Total actual path cells
 
     for tokens, labels in tqdm(dataloader, desc="Train", leave=False):
         tokens = tokens.to(device)
@@ -49,9 +52,17 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         correct += ((preds == labels) & mask).sum().item()
         total += mask.sum().item()
 
+        # Path recall: what % of actual path cells are correctly predicted
+        path_mask = labels == 1
+        path_correct += ((preds == 1) & path_mask).sum().item()
+        path_total += path_mask.sum().item()
+
+    path_recall = path_correct / path_total if path_total > 0 else 0
+
     return {
         'loss': total_loss / len(dataloader.dataset),
-        'accuracy': correct / total if total > 0 else 0
+        'accuracy': correct / total if total > 0 else 0,
+        'path_recall': path_recall
     }
 
 
@@ -61,6 +72,8 @@ def evaluate(model, dataloader, criterion, device):
     total_loss = 0
     correct = 0
     total = 0
+    path_correct = 0
+    path_total = 0
 
     with torch.no_grad():
         for tokens, labels in tqdm(dataloader, desc="Val", leave=False):
@@ -77,9 +90,16 @@ def evaluate(model, dataloader, criterion, device):
             correct += ((preds == labels) & mask).sum().item()
             total += mask.sum().item()
 
+            path_mask = labels == 1
+            path_correct += ((preds == 1) & path_mask).sum().item()
+            path_total += path_mask.sum().item()
+
+    path_recall = path_correct / path_total if path_total > 0 else 0
+
     return {
         'loss': total_loss / len(dataloader.dataset),
-        'accuracy': correct / total if total > 0 else 0
+        'accuracy': correct / total if total > 0 else 0,
+        'path_recall': path_recall
     }
 
 
@@ -133,7 +153,11 @@ def train(
     # Setup training
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
-    criterion = nn.CrossEntropyLoss(ignore_index=-100)  # Ignore coordinate tokens
+
+    # Class weights: path cells (~15%) are minority, weight them higher
+    # This encourages the model to actually learn paths, not just predict "not path"
+    class_weights = torch.tensor([1.0, 5.0], device=device)  # [not_path, path]
+    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
 
     # Checkpointing
     checkpoint_dir = Path(checkpoint_dir)
@@ -163,8 +187,8 @@ def train(
             patience_counter += 1
 
         status = "★ best" if is_best else f"[es:{patience_counter}/{patience}]"
-        print(f"E {epoch+1:3d} │ train: loss={train_metrics['loss']:.4f} acc={train_metrics['accuracy']:.3f} │ "
-              f"val: loss={val_metrics['loss']:.4f} acc={val_metrics['accuracy']:.3f} {status}")
+        print(f"E {epoch+1:3d} │ train: loss={train_metrics['loss']:.4f} acc={train_metrics['accuracy']:.3f} path={train_metrics['path_recall']:.3f} │ "
+              f"val: loss={val_metrics['loss']:.4f} acc={val_metrics['accuracy']:.3f} path={val_metrics['path_recall']:.3f} {status}")
 
         if patience_counter >= patience:
             print(f"\nEarly stopping at epoch {epoch + 1}")
