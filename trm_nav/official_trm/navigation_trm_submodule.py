@@ -227,8 +227,10 @@ class NavigationTRM(nn.Module):
                 z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
             z_H = inner.L_level(z_H, z_L, **seq_info)
 
-        # Pool over all tokens
-        pooled_features = z_H.float().mean(dim=1)
+        # Use coordinate tokens (last 4) instead of mean pooling all tokens
+        # Last 4 tokens = start_row, start_col, goal_row, goal_col
+        coord_features = z_H[:, -4:, :].float()  # (batch, 4, hidden)
+        pooled_features = coord_features.mean(dim=1)  # (batch, hidden)
 
         # Project to action space
         return self.classifier(pooled_features)
