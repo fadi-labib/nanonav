@@ -216,9 +216,10 @@ class NavigationTRM(nn.Module):
             cos_sin=inner.rotary_emb() if hasattr(inner, "rotary_emb") else None,
         )
 
-        # Initialize z_H from embeddings for gradient flow, z_L from zeros
-        z_H = input_embeddings
-        z_L = torch.zeros_like(input_embeddings)
+        # Initialize z_H and z_L from learnable buffers (like original TRM)
+        # H_init/L_init are (hidden_size,) -> broadcast to (batch, seq_len, hidden)
+        z_H = inner.H_init.expand(batch_size, self.config.seq_len, -1).clone()
+        z_L = inner.L_init.expand(batch_size, self.config.seq_len, -1).clone()
 
         # Run ALL recursion steps WITH gradients
         for _H_step in range(self.config.H_cycles):
