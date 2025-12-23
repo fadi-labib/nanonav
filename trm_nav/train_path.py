@@ -5,11 +5,12 @@ Trains TRM to predict the full path (sequence-to-sequence), giving
 64x more gradient signal per sample compared to single action prediction.
 """
 
+import math
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 from torch.amp import autocast, GradScaler
 from pathlib import Path
 from tqdm import tqdm
@@ -17,6 +18,24 @@ import sys
 
 from .dataset import PathPredictionDataset, build_path_dataset, save_dataset
 from .model import create_model
+
+
+class FocalLoss(nn.Module):
+    """Focal Loss for handling class imbalance - focuses on hard examples."""
+
+    def __init__(self, alpha=None, gamma=2.0, ignore_index=-100):
+        super().__init__()
+        self.alpha = alpha  # Class weights
+        self.gamma = gamma  # Focusing parameter (higher = more focus on hard examples)
+        self.ignore_index = ignore_index
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.functional.cross_entropy(
+            inputs, targets, weight=self.alpha, ignore_index=self.ignore_index, reduction='none'
+        )
+        pt = torch.exp(-ce_loss)  # Probability of correct class
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
 
 
 def train_epoch(model, dataloader, optimizer, criterion, device, scaler=None):
@@ -127,9 +146,12 @@ def train(
     weight_decay: float = 0.01,
     epochs: int = 100,
     patience: int = 15,
+    warmup_epochs: int = 5,  # LR warmup epochs (like original TRM)
     device: str = None,
     num_workers: int = 4,  # Parallel data loading
     use_amp: bool = True,  # Mixed precision training
+    use_focal_loss: bool = False,  # Use focal loss instead of CE
+    focal_gamma: float = 2.0,  # Focal loss focusing parameter
 ):
     """Train path prediction model."""
 
@@ -138,6 +160,11 @@ def train(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
     use_cuda = device.type == "cuda"
+
+    # Enable TensorFloat32 for faster matmul on Ampere+ GPUs
+    if use_cuda:
+        torch.set_float32_matmul_precision('high')
+
     print(f"✓ Device: {device}")
 
     # Load datasets with optimized DataLoader settings
@@ -173,23 +200,44 @@ def train(
         mode="path_prediction"
     ).to(device)
 
+    # torch.compile for faster execution (like original TRM)
+    if use_cuda and hasattr(torch, 'compile'):
+        model = torch.compile(model)
+        compiled = True
+    else:
+        compiled = False
+
     num_params = sum(p.numel() for p in model.parameters())
     print(f"✓ Model: {num_params:,} params (path prediction mode)")
     print(f"✓ Config: lr={lr}, batch={batch_size}, max_recursion={max_recursion_steps}")
-    print(f"✓ AMP: {'enabled' if use_amp and use_cuda else 'disabled'}, workers={num_workers}")
+    print(f"✓ AMP: {'enabled' if use_amp and use_cuda else 'disabled'}, workers={num_workers}, compile={compiled}")
 
     # Setup training
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
+
+    # Warmup + Cosine decay (like original TRM)
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs  # Linear warmup
+        else:
+            # Cosine decay
+            progress = (epoch - warmup_epochs) / max(1, epochs - warmup_epochs)
+            return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))  # Decay to 10% of max
+
+    scheduler = LambdaLR(optimizer, lr_lambda)
 
     # Mixed precision scaler
     scaler = GradScaler('cuda') if use_amp and use_cuda else None
 
     # 4-class prediction like original TRM: 0=pad, 1=free, 2=obstacle, 3=path
     # Weight class 3 (path) higher since it's the minority we care about
-    # Balance between path precision and recall
     class_weights = torch.tensor([0.1, 1.0, 1.0, 8.0], device=device)  # [pad, free, obstacle, path]
-    criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
+    if use_focal_loss:
+        criterion = FocalLoss(alpha=class_weights, gamma=focal_gamma, ignore_index=-100)
+        print(f"✓ Loss: Focal (gamma={focal_gamma})")
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
+        print(f"✓ Loss: CrossEntropy")
 
     # Checkpointing
     checkpoint_dir = Path(checkpoint_dir)
@@ -248,11 +296,17 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--warmup-epochs", type=int, default=5,
+                        help="LR warmup epochs (default: 5)")
     parser.add_argument("--device", default=None)
     parser.add_argument("--num-workers", type=int, default=4,
                         help="Number of data loading workers (default: 4)")
     parser.add_argument("--no-amp", action="store_true",
                         help="Disable automatic mixed precision")
+    parser.add_argument("--focal-loss", action="store_true",
+                        help="Use focal loss instead of cross-entropy")
+    parser.add_argument("--focal-gamma", type=float, default=2.0,
+                        help="Focal loss gamma (default: 2.0)")
 
     args = parser.parse_args()
 
@@ -270,7 +324,10 @@ if __name__ == "__main__":
         weight_decay=args.weight_decay,
         epochs=args.epochs,
         patience=args.patience,
+        warmup_epochs=args.warmup_epochs,
         device=args.device,
         num_workers=args.num_workers,
         use_amp=not args.no_amp,
+        use_focal_loss=args.focal_loss,
+        focal_gamma=args.focal_gamma,
     )
