@@ -331,11 +331,190 @@ def build_dataset(
     }
 
 
+def encode_path_labels(
+    grid: np.ndarray,
+    path: List[Tuple[int, int]],
+) -> torch.Tensor:
+    """
+    Encode path as per-cell labels for sequence-to-sequence prediction.
+
+    Args:
+        grid: 2D occupancy grid
+        path: List of (row, col) positions forming the path
+
+    Returns:
+        1D tensor of labels:
+        - Grid cells: 0 = not path, 1 = path
+        - Coordinate tokens: -100 (ignore in loss)
+    """
+    grid_size = grid.shape[0]
+
+    # Create path mask for grid cells
+    path_mask = np.zeros(grid_size * grid_size, dtype=np.int64)
+    for row, col in path:
+        idx = row * grid_size + col
+        path_mask[idx] = 1
+
+    # Coordinate tokens get ignore label (-100)
+    coord_labels = np.full(4, -100, dtype=np.int64)
+
+    # Concatenate
+    labels = np.concatenate([path_mask, coord_labels])
+
+    return torch.tensor(labels, dtype=torch.long)
+
+
+def build_path_dataset(
+    num_samples: int,
+    grid_size: int = 8,
+    obstacle_density: float = 0.2,
+    base_seed: int = 42,
+    augment: bool = False
+) -> dict:
+    """
+    Build dataset for path prediction (sequence-to-sequence).
+
+    Each sample contains:
+        - tokens: Encoded state (flattened grid + start/goal coords)
+        - labels: Per-cell path labels (0=not path, 1=path, -100=ignore)
+
+    This gives the model 64 predictions per sample instead of just 1,
+    providing much richer gradient signal for learning.
+
+    Args:
+        num_samples: Target number of samples (each sample = one full path)
+        grid_size: Size of grid
+        obstacle_density: Obstacle probability
+        base_seed: Random seed for reproducibility
+        augment: Whether to apply data augmentation (8x samples)
+
+    Returns:
+        Dictionary with 'tokens' and 'labels' tensors
+    """
+    all_tokens = []
+    all_labels = []
+
+    map_idx = 0
+
+    while len(all_tokens) < num_samples:
+        try:
+            # Generate solvable map
+            grid, start, goal = generate_solvable_map(
+                size=grid_size,
+                obstacle_density=obstacle_density,
+                seed=base_seed + map_idx
+            )
+
+            # Get optimal path
+            path = astar_path(grid, start, goal)
+
+            if path is None or len(path) < 2:
+                map_idx += 1
+                continue
+
+            if augment:
+                # Generate 8 augmented versions
+                # For path prediction, we need to augment the entire path
+                for aug_idx in range(8):
+                    aug_grid = grid.copy()
+                    aug_path = list(path)
+
+                    if aug_idx == 1:  # Rotate 90°
+                        aug_grid = np.rot90(grid, k=-1)
+                        aug_path = [rotate_position_90(p, grid_size) for p in path]
+                    elif aug_idx == 2:  # Rotate 180°
+                        aug_grid = np.rot90(grid, k=2)
+                        aug_path = [rotate_position_180(p, grid_size) for p in path]
+                    elif aug_idx == 3:  # Rotate 270°
+                        aug_grid = np.rot90(grid, k=-3)
+                        aug_path = [rotate_position_270(p, grid_size) for p in path]
+                    elif aug_idx == 4:  # Flip horizontal
+                        aug_grid = np.fliplr(grid)
+                        aug_path = [flip_position_horizontal(p, grid_size) for p in path]
+                    elif aug_idx == 5:  # Flip vertical
+                        aug_grid = np.flipud(grid)
+                        aug_path = [flip_position_vertical(p, grid_size) for p in path]
+                    elif aug_idx == 6:  # Flip horizontal + rotate 90°
+                        aug_grid = np.rot90(np.fliplr(grid), k=-1)
+                        aug_path = [rotate_position_90(flip_position_horizontal(p, grid_size), grid_size) for p in path]
+                    elif aug_idx == 7:  # Flip vertical + rotate 90°
+                        aug_grid = np.rot90(np.flipud(grid), k=-1)
+                        aug_path = [rotate_position_90(flip_position_vertical(p, grid_size), grid_size) for p in path]
+
+                    aug_start = aug_path[0]
+                    aug_goal = aug_path[-1]
+
+                    tokens = encode_state(aug_grid, aug_start, aug_goal)
+                    labels = encode_path_labels(aug_grid, aug_path)
+
+                    all_tokens.append(tokens)
+                    all_labels.append(labels)
+
+                    if len(all_tokens) >= num_samples:
+                        break
+            else:
+                # Just the original
+                tokens = encode_state(grid, start, goal)
+                labels = encode_path_labels(grid, path)
+
+                all_tokens.append(tokens)
+                all_labels.append(labels)
+
+            map_idx += 1
+
+        except ValueError:
+            map_idx += 1
+            continue
+
+    # Trim to exact size
+    all_tokens = all_tokens[:num_samples]
+    all_labels = all_labels[:num_samples]
+
+    return {
+        'tokens': torch.stack(all_tokens),
+        'labels': torch.stack(all_labels)
+    }
+
+
+class PathPredictionDataset(Dataset):
+    """
+    PyTorch Dataset for path prediction (sequence-to-sequence).
+
+    Each sample contains:
+        - tokens: Encoded state (flattened grid + start/goal coords)
+        - labels: Per-cell path labels (0=not path, 1=path, -100=ignore)
+    """
+
+    def __init__(self, data_path: Optional[str] = None, data: Optional[dict] = None):
+        if data_path is not None:
+            loaded = torch.load(data_path)
+            self.tokens = loaded['tokens']
+            self.labels = loaded['labels']
+        elif data is not None:
+            self.tokens = data['tokens']
+            self.labels = data['labels']
+        else:
+            raise ValueError("Must provide either data_path or data")
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(idx, torch.Tensor):
+            idx = idx.item()
+        return self.tokens[idx], self.labels[idx]
+
+
 def save_dataset(data: dict, path: str) -> None:
     """Save dataset to disk."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(data, path)
-    print(f"Saved dataset with {len(data['actions'])} samples to {path}")
+
+    # Detect dataset type
+    if 'labels' in data:
+        print(f"Saved path dataset with {len(data['labels'])} samples to {path}")
+    else:
+        print(f"Saved action dataset with {len(data['actions'])} samples to {path}")
 
 
 def load_dataset(path: str) -> dict:

@@ -76,11 +76,13 @@ class NavigationTRM(nn.Module):
         dropout: float = 0.1,
         use_fallback: bool = False,
         num_actions: int = 4,
+        mode: str = "classification",  # "classification" or "path_prediction"
         **kwargs
     ):
         super().__init__()
         self.num_actions = num_actions
         self.use_fallback = use_fallback
+        self.mode = mode
         self._debug_mode = False
         self._last_debug_info: Optional[RecursionDebugInfo] = None
 
@@ -158,15 +160,23 @@ class NavigationTRM(nn.Module):
         self.config = self.trm.config
         self.vocab_size = vocab_size
 
-        # Classification head consumes hidden representations (z_H)
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(hidden_size),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, num_actions)
-        )
+        if self.mode == "path_prediction":
+            # Per-token path prediction head (seq2seq like original TRM)
+            # Predicts 0=not path, 1=path for each token
+            self.path_head = nn.Sequential(
+                nn.LayerNorm(hidden_size),
+                nn.Linear(hidden_size, 2)  # Binary: path or not
+            )
+        else:
+            # Classification head consumes hidden representations (z_H)
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(hidden_size),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, hidden_size),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, num_actions)
+            )
     
     def _init_weights(self):
         """Initialize weights."""
@@ -227,13 +237,15 @@ class NavigationTRM(nn.Module):
                 z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
             z_H = inner.L_level(z_H, z_L, **seq_info)
 
-        # Use coordinate tokens (last 4) instead of mean pooling all tokens
-        # Last 4 tokens = start_row, start_col, goal_row, goal_col
-        coord_features = z_H[:, -4:, :].float()  # (batch, 4, hidden)
-        pooled_features = coord_features.mean(dim=1)  # (batch, hidden)
-
-        # Project to action space
-        return self.classifier(pooled_features)
+        if self.mode == "path_prediction":
+            # Per-token prediction (seq2seq like original TRM)
+            # Output: (batch, seq_len, 2) - logits for each token
+            return self.path_head(z_H.float())
+        else:
+            # Classification mode: pool coordinate tokens and classify
+            coord_features = z_H[:, -4:, :].float()  # (batch, 4, hidden)
+            pooled_features = coord_features.mean(dim=1)  # (batch, hidden)
+            return self.classifier(pooled_features)
 
     @staticmethod
     def _carry_to_device(carry, device: torch.device):

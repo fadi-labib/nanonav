@@ -32,6 +32,7 @@ class TRMNavigator(nn.Module):
         halt_prob_thres: float = 0.5,
         dropout: float = 0.1,
         use_fallback: bool = False,
+        mode: str = "classification",  # "classification" or "path_prediction"
     ):
         super().__init__()
 
@@ -41,6 +42,7 @@ class TRMNavigator(nn.Module):
         self.max_recursion_steps = max_recursion_steps
         self.halt_prob_thres = halt_prob_thres
         self.dropout_rate = dropout
+        self.mode = mode
 
         # Official TRM implementation
         self.trm = NavigationTRM(
@@ -50,7 +52,8 @@ class TRMNavigator(nn.Module):
             num_heads=max(1, dim // 16),
             max_recursion_steps=max_recursion_steps,
             dropout=dropout,
-            use_fallback=use_fallback
+            use_fallback=use_fallback,
+            mode=mode
         )
 
     def forward(
@@ -98,12 +101,84 @@ class TRMNavigator(nn.Module):
         logits = self.forward(tokens)
         return torch.softmax(logits, dim=-1)
 
+    def predict_path(self, tokens: torch.Tensor, grid_size: int = 8) -> torch.Tensor:
+        """
+        Predict path mask for path_prediction mode.
+
+        Args:
+            tokens: Input tokens (batch, seq_len)
+            grid_size: Size of grid (for reshaping)
+
+        Returns:
+            path_mask: (batch, grid_size, grid_size) binary mask
+        """
+        if self.mode != "path_prediction":
+            raise ValueError("predict_path only works in path_prediction mode")
+
+        logits = self.forward(tokens)  # (batch, seq_len, 2)
+        # Take only grid tokens (first grid_size^2 tokens)
+        grid_logits = logits[:, :grid_size * grid_size, :]  # (batch, 64, 2)
+        path_preds = grid_logits.argmax(dim=-1)  # (batch, 64)
+        return path_preds.view(-1, grid_size, grid_size)
+
+    def predict_action_from_path(
+        self,
+        tokens: torch.Tensor,
+        grid_size: int = 8
+    ) -> torch.Tensor:
+        """
+        Predict next action by predicting path and finding next step.
+
+        For inference: predicts the full path, then determines which
+        adjacent cell is on the path to get the action.
+
+        Args:
+            tokens: Input tokens (batch, seq_len)
+            grid_size: Size of grid
+
+        Returns:
+            actions: (batch,) predicted actions
+        """
+        if self.mode != "path_prediction":
+            raise ValueError("predict_action_from_path only works in path_prediction mode")
+
+        batch_size = tokens.shape[0]
+        device = tokens.device
+
+        # Get predicted path
+        path_mask = self.predict_path(tokens, grid_size)  # (batch, grid_size, grid_size)
+
+        # Extract current position from tokens (last 4 tokens are coords)
+        # tokens[-4:-2] = start_row, start_col (offset by 3)
+        start_row = (tokens[:, -4] - 3).long()
+        start_col = (tokens[:, -3] - 3).long()
+
+        actions = torch.zeros(batch_size, dtype=torch.long, device=device)
+
+        # For each sample, find adjacent path cell
+        # Actions: 0=UP, 1=DOWN, 2=LEFT, 3=RIGHT
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # UP, DOWN, LEFT, RIGHT
+
+        for b in range(batch_size):
+            r, c = start_row[b].item(), start_col[b].item()
+
+            # Check each direction for a path cell
+            for action_idx, (dr, dc) in enumerate(directions):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < grid_size and 0 <= nc < grid_size:
+                    if path_mask[b, nr, nc] == 1:
+                        actions[b] = action_idx
+                        break
+
+        return actions
+
 
 def create_model(
     grid_size: int = 8,
     dim: int = 64,
     depth: int = 2,
     use_fallback: bool = False,
+    mode: str = "classification",
     **kwargs
 ) -> TRMNavigator:
     """
@@ -113,6 +188,7 @@ def create_model(
         grid_size: Size of the grid (determines seq_len)
         dim: Model dimension
         depth: Number of layers (for compatibility, not used in official TRM)
+        mode: "classification" for action prediction, "path_prediction" for seq2seq
 
     Returns:
         TRMNavigator model
@@ -124,5 +200,6 @@ def create_model(
         seq_len=seq_len,
         depth=depth,  # Kept for compatibility
         use_fallback=use_fallback,
+        mode=mode,
         **kwargs
     )
