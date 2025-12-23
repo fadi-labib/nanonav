@@ -77,12 +77,14 @@ class NavigationTRM(nn.Module):
         use_fallback: bool = False,
         num_actions: int = 4,
         mode: str = "classification",  # "classification" or "path_prediction"
+        grad_last_only: bool = False,  # Like original TRM: only last H-cycle has gradients
         **kwargs
     ):
         super().__init__()
         self.num_actions = num_actions
         self.use_fallback = use_fallback
         self.mode = mode
+        self.grad_last_only = grad_last_only
         self._debug_mode = False
         self._last_debug_info: Optional[RecursionDebugInfo] = None
 
@@ -203,6 +205,9 @@ class NavigationTRM(nn.Module):
 
         The official TRM detaches z_H in the carry, so we call the inner model
         directly to capture z_H before it's detached.
+
+        If grad_last_only=True, only the last H-cycle has gradients (like original TRM).
+        This can help with vanishing gradients in deep recursion.
         """
         batch_size = tokens.shape[0]
         device = tokens.device
@@ -232,11 +237,25 @@ class NavigationTRM(nn.Module):
         z_H = inner.H_init.expand(batch_size, self.config.seq_len, -1).clone()
         z_L = inner.L_init.expand(batch_size, self.config.seq_len, -1).clone()
 
-        # Run ALL recursion steps WITH gradients
-        for _H_step in range(self.config.H_cycles):
+        if self.grad_last_only and self.config.H_cycles > 1:
+            # Like original TRM: only last H-cycle has gradients
+            # This prevents vanishing gradients with deep recursion
+            with torch.no_grad():
+                for _H_step in range(self.config.H_cycles - 1):
+                    for _L_step in range(self.config.L_cycles):
+                        z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
+                    z_H = inner.L_level(z_H, z_L, **seq_info)
+
+            # Last H-cycle WITH gradients
             for _L_step in range(self.config.L_cycles):
                 z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
             z_H = inner.L_level(z_H, z_L, **seq_info)
+        else:
+            # All steps with gradients (original behavior)
+            for _H_step in range(self.config.H_cycles):
+                for _L_step in range(self.config.L_cycles):
+                    z_L = inner.L_level(z_L, z_H + input_embeddings, **seq_info)
+                z_H = inner.L_level(z_H, z_L, **seq_info)
 
         if self.mode == "path_prediction":
             # Per-token prediction (seq2seq like original TRM)

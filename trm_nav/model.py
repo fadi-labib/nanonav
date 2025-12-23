@@ -33,6 +33,7 @@ class TRMNavigator(nn.Module):
         dropout: float = 0.1,
         use_fallback: bool = False,
         mode: str = "classification",  # "classification" or "path_prediction"
+        grad_last_only: bool = False,  # Like original TRM: only last H-cycle has gradients
     ):
         super().__init__()
 
@@ -53,7 +54,8 @@ class TRMNavigator(nn.Module):
             max_recursion_steps=max_recursion_steps,
             dropout=dropout,
             use_fallback=use_fallback,
-            mode=mode
+            mode=mode,
+            grad_last_only=grad_last_only,
         )
 
     def forward(

@@ -152,6 +152,7 @@ def train(
     use_amp: bool = True,  # Mixed precision training
     use_focal_loss: bool = False,  # Use focal loss instead of CE
     focal_gamma: float = 2.0,  # Focal loss focusing parameter
+    grad_last_only: bool = False,  # Like original TRM: only last H-cycle has gradients
 ):
     """Train path prediction model."""
 
@@ -197,7 +198,8 @@ def train(
         depth=depth,
         dropout=dropout,
         max_recursion_steps=max_recursion_steps,
-        mode="path_prediction"
+        mode="path_prediction",
+        grad_last_only=grad_last_only,
     ).to(device)
 
     # torch.compile for faster execution (like original TRM)
@@ -211,6 +213,7 @@ def train(
     print(f"✓ Model: {num_params:,} params (path prediction mode)")
     print(f"✓ Config: lr={lr}, batch={batch_size}, max_recursion={max_recursion_steps}")
     print(f"✓ AMP: {'enabled' if use_amp and use_cuda else 'disabled'}, workers={num_workers}, compile={compiled}")
+    print(f"✓ Grad: {'last step only' if grad_last_only else 'all steps'}")
 
     # Setup training
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -307,6 +310,8 @@ if __name__ == "__main__":
                         help="Use focal loss instead of cross-entropy")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
+    parser.add_argument("--grad-last-only", action="store_true",
+                        help="Like original TRM: only last H-cycle has gradients")
 
     args = parser.parse_args()
 
@@ -330,4 +335,5 @@ if __name__ == "__main__":
         use_amp=not args.no_amp,
         use_focal_loss=args.focal_loss,
         focal_gamma=args.focal_gamma,
+        grad_last_only=args.grad_last_only,
     )
