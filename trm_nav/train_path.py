@@ -156,7 +156,8 @@ def train(
 
     # 4-class prediction like original TRM: 0=pad, 1=free, 2=obstacle, 3=path
     # Weight class 3 (path) higher since it's the minority we care about
-    class_weights = torch.tensor([0.1, 1.0, 1.0, 5.0], device=device)  # [pad, free, obstacle, path]
+    # Balance between path precision and recall
+    class_weights = torch.tensor([0.1, 1.0, 1.0, 8.0], device=device)  # [pad, free, obstacle, path]
     criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
 
     # Checkpointing
