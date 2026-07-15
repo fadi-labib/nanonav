@@ -5,9 +5,11 @@ Trains TRM to predict the full path (sequence-to-sequence), giving
 64x more gradient signal per sample compared to single action prediction.
 """
 
+import copy
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
@@ -18,6 +20,128 @@ import sys
 
 from .dataset import PathPredictionDataset, build_path_dataset, save_dataset
 from .model import create_model
+
+
+# Try to import AdamATan2 (used by original TRM)
+try:
+    from adam_atan2 import AdamATan2
+    HAS_ADAM_ATAN2 = True
+except ImportError:
+    HAS_ADAM_ATAN2 = False
+
+
+# =============================================================================
+# Stablemax Loss (from original TRM)
+# =============================================================================
+
+def stablemax_s(x, epsilon=1e-30):
+    """Stablemax transformation function.
+
+    Unlike softmax which uses exp(), stablemax uses a piecewise linear function
+    that avoids numerical overflow and has better gradient properties.
+    """
+    return torch.where(
+        x < 0,
+        1 / (1 - x + epsilon),
+        x + 1
+    )
+
+
+def log_stablemax(x, dim=-1):
+    """Log-stablemax normalization."""
+    s_x = stablemax_s(x)
+    return torch.log(s_x / torch.sum(s_x, dim=dim, keepdim=True))
+
+
+class StablemaxCrossEntropyLoss(nn.Module):
+    """Stablemax Cross-Entropy Loss from original TRM.
+
+    Uses stablemax instead of softmax for better gradient flow and numerical stability.
+    """
+
+    def __init__(self, weight=None, ignore_index=-100):
+        super().__init__()
+        self.weight = weight
+        self.ignore_index = ignore_index
+
+    def forward(self, inputs, targets):
+        # Compute log-stablemax probabilities (use float64 for stability like original)
+        logprobs = log_stablemax(inputs.to(torch.float64), dim=-1)
+
+        # Create valid mask
+        valid_mask = (targets != self.ignore_index)
+
+        # Replace ignored indices with 0 for gather
+        safe_targets = torch.where(valid_mask, targets, 0)
+
+        # Gather log probabilities for target classes
+        target_logprobs = torch.gather(
+            logprobs,
+            dim=-1,
+            index=safe_targets.unsqueeze(-1)
+        ).squeeze(-1)
+
+        # Apply class weights if provided
+        if self.weight is not None:
+            weights = self.weight[safe_targets]
+            loss = -target_logprobs * weights
+        else:
+            loss = -target_logprobs
+
+        # Mask out ignored indices and compute mean
+        loss = torch.where(valid_mask, loss, 0)
+        return loss.sum() / valid_mask.sum().clamp(min=1)
+
+
+# =============================================================================
+# EMA (Exponential Moving Average) from original TRM
+# =============================================================================
+
+class EMAHelper:
+    """Exponential Moving Average for model weights.
+
+    Maintains a shadow copy of model weights that is updated as:
+        shadow = mu * shadow + (1 - mu) * current_weights
+
+    Used for more stable evaluation (the EMA weights often generalize better).
+    """
+
+    def __init__(self, mu=0.999):
+        self.mu = mu
+        self.shadow = {}
+
+    def register(self, model):
+        """Register model parameters for EMA tracking."""
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self, model):
+        """Update shadow weights with current model weights."""
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name].data = (
+                    self.mu * self.shadow[name].data +
+                    (1.0 - self.mu) * param.data
+                )
+
+    def apply_shadow(self, model):
+        """Apply shadow weights to model (for evaluation)."""
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                param.data.copy_(self.shadow[name].data)
+
+    def ema_copy(self, model):
+        """Create a copy of the model with EMA weights."""
+        model_copy = copy.deepcopy(model)
+        self.apply_shadow(model_copy)
+        return model_copy
+
+    def state_dict(self):
+        return self.shadow
+
+    def load_state_dict(self, state_dict):
+        self.shadow = state_dict
 
 
 class FocalLoss(nn.Module):
@@ -145,6 +269,8 @@ def train(
     batch_size: int = 512,  # Increased for better GPU utilization
     lr: float = 1e-3,
     weight_decay: float = 0.01,
+    beta1: float = 0.9,  # Adam beta1 (original TRM uses 0.9)
+    beta2: float = 0.95,  # Adam beta2 (original TRM uses 0.95, Llama-style)
     epochs: int = 100,
     patience: int = 15,
     warmup_epochs: int = 5,  # LR warmup epochs (like original TRM)
@@ -153,6 +279,10 @@ def train(
     use_amp: bool = True,  # Mixed precision training
     use_focal_loss: bool = False,  # Use focal loss instead of CE
     focal_gamma: float = 2.0,  # Focal loss focusing parameter
+    use_stablemax: bool = False,  # Use stablemax loss (from original TRM)
+    use_ema: bool = False,  # Use EMA for evaluation (from original TRM)
+    ema_rate: float = 0.999,  # EMA decay rate
+    use_adam_atan2: bool = False,  # Use AdamATan2 optimizer (from original TRM)
     grad_last_only: bool = False,  # Like original TRM: only last H-cycle has gradients
 ):
     """Train path prediction model."""
@@ -217,8 +347,25 @@ def train(
     print(f"✓ AMP: {'enabled' if use_amp and use_cuda else 'disabled'}, workers={num_workers}, compile={compiled}")
     print(f"✓ Grad: {'last step only' if grad_last_only else 'all steps'}")
 
-    # Setup training
-    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    # Setup optimizer
+    if use_adam_atan2:
+        if not HAS_ADAM_ATAN2:
+            print("WARNING: adam_atan2 not installed, falling back to AdamW")
+            print("         Install with: pip install adam-atan2-pytorch")
+            optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=(beta1, beta2))
+            optimizer_name = "AdamW"
+        else:
+            optimizer = AdamATan2(model.parameters(), lr=lr, weight_decay=weight_decay, betas=(beta1, beta2))
+            optimizer_name = "AdamATan2"
+    else:
+        optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=(beta1, beta2))
+        optimizer_name = "AdamW"
+
+    # Setup EMA if enabled
+    ema_helper = None
+    if use_ema:
+        ema_helper = EMAHelper(mu=ema_rate)
+        ema_helper.register(model)
 
     # Warmup + Cosine decay (like original TRM)
     def lr_lambda(epoch):
@@ -237,12 +384,20 @@ def train(
     # 4-class prediction like original TRM: 0=pad, 1=free, 2=obstacle, 3=path
     # Weight class 3 (path) higher since it's the minority we care about
     class_weights = torch.tensor([0.1, 1.0, 1.0, 8.0], device=device)  # [pad, free, obstacle, path]
-    if use_focal_loss:
+    if use_stablemax:
+        criterion = StablemaxCrossEntropyLoss(weight=class_weights, ignore_index=-100)
+        loss_name = "Stablemax"
+    elif use_focal_loss:
         criterion = FocalLoss(alpha=class_weights, gamma=focal_gamma, ignore_index=-100)
-        print(f"✓ Loss: Focal (gamma={focal_gamma})")
+        loss_name = f"Focal (gamma={focal_gamma})"
     else:
         criterion = nn.CrossEntropyLoss(weight=class_weights, ignore_index=-100)
-        print(f"✓ Loss: CrossEntropy")
+        loss_name = "CrossEntropy"
+
+    print(f"✓ Optimizer: {optimizer_name} (betas={beta1},{beta2})")
+    print(f"✓ Loss: {loss_name}")
+    if use_ema:
+        print(f"✓ EMA: enabled (rate={ema_rate})")
 
     # Checkpointing
     checkpoint_dir = Path(checkpoint_dir)
@@ -255,7 +410,18 @@ def train(
 
     for epoch in range(epochs):
         train_metrics = train_epoch(model, train_loader, optimizer, criterion, device, scaler)
-        val_metrics = evaluate(model, val_loader, criterion, device)
+
+        # Update EMA after training epoch
+        if ema_helper is not None:
+            ema_helper.update(model)
+
+        # Evaluate with EMA model if enabled, otherwise use regular model
+        if ema_helper is not None:
+            ema_model = ema_helper.ema_copy(model)
+            val_metrics = evaluate(ema_model, val_loader, criterion, device)
+            del ema_model  # Free memory
+        else:
+            val_metrics = evaluate(model, val_loader, criterion, device)
 
         scheduler.step()
 
@@ -263,10 +429,16 @@ def train(
         if is_best:
             best_val_loss = val_metrics['loss']
             patience_counter = 0
+            # Save EMA weights if enabled, otherwise regular weights
+            if ema_helper is not None:
+                save_state_dict = {k: v.clone() for k, v in ema_helper.shadow.items()}
+            else:
+                save_state_dict = model.state_dict()
             torch.save({
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': save_state_dict,
                 'val_loss': val_metrics['loss'],
                 'val_acc': val_metrics['accuracy'],
+                'use_ema': use_ema,
             }, checkpoint_dir / "best.pt")
         else:
             patience_counter += 1
@@ -302,6 +474,10 @@ if __name__ == "__main__":
                         help="Batch size (default: 512 for better GPU utilization)")
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--beta1", type=float, default=0.9,
+                        help="Adam beta1 (default: 0.9)")
+    parser.add_argument("--beta2", type=float, default=0.95,
+                        help="Adam beta2 (default: 0.95, Llama-style)")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--warmup-epochs", type=int, default=5,
@@ -315,6 +491,14 @@ if __name__ == "__main__":
                         help="Use focal loss instead of cross-entropy")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
+    parser.add_argument("--stablemax", action="store_true",
+                        help="Use stablemax loss (from original TRM)")
+    parser.add_argument("--ema", action="store_true",
+                        help="Use EMA for evaluation (from original TRM)")
+    parser.add_argument("--ema-rate", type=float, default=0.999,
+                        help="EMA decay rate (default: 0.999)")
+    parser.add_argument("--adam-atan2", action="store_true",
+                        help="Use AdamATan2 optimizer (from original TRM)")
     parser.add_argument("--grad-last-only", action="store_true",
                         help="Like original TRM: only last H-cycle has gradients")
 
@@ -333,6 +517,8 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        beta1=args.beta1,
+        beta2=args.beta2,
         epochs=args.epochs,
         patience=args.patience,
         warmup_epochs=args.warmup_epochs,
@@ -341,5 +527,9 @@ if __name__ == "__main__":
         use_amp=not args.no_amp,
         use_focal_loss=args.focal_loss,
         focal_gamma=args.focal_gamma,
+        use_stablemax=args.stablemax,
+        use_ema=args.ema,
+        ema_rate=args.ema_rate,
+        use_adam_atan2=args.adam_atan2,
         grad_last_only=args.grad_last_only,
     )
